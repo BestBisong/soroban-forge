@@ -13,7 +13,7 @@ use clap::{ArgMatches, Command};
 use soroban_forge_core::{ForgeContext, ForgeError, ForgePlugin, Result};
 
 /// Minimum Rust version able to target `wasm32v1-none`.
-pub const MIN_RUST: (u32, u32) = (1, 84);
+pub const MIN_RUST: (u32, u32) = (1, 84); // minimum major.minor
 
 /// Outcome of a single environment check.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

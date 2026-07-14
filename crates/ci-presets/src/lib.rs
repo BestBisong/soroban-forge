@@ -24,7 +24,7 @@ use soroban_forge_core::{ForgeContext, ForgeError, ForgePlugin, Result};
 static PRESETS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../../presets");
 
 /// Workflows always written.
-const BASE_WORKFLOWS: &[&str] = &["build-test.yml", "contract-size.yml"];
+const BASE_WORKFLOWS: &[&str] = &["build-test.yml", "contract-size.yml"]; // base workflows
 /// Workflow written only with `--deploy`.
 const DEPLOY_WORKFLOW: &str = "testnet-deploy.yml";
 

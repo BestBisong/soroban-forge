@@ -13,7 +13,7 @@ use std::collections::BTreeMap;
 /// Variables available to a template.
 pub type Vars = BTreeMap<String, String>;
 
-/// Render `input`, substituting known `{{variable}}` placeholders.
+/// Render `input`, substituting known `{{variable}}` placeholders. // simple mustache-like renderer
 pub fn render_str(input: &str, vars: &Vars) -> String {
     let mut out = String::with_capacity(input.len());
     let mut rest = input;

@@ -16,7 +16,7 @@ use serde::Deserialize;
 use crate::error::{ForgeError, Result};
 
 /// File name looked up in the working directory.
-pub const CONFIG_FILE_NAME: &str = "forge.toml";
+pub const CONFIG_FILE_NAME: &str = "forge.toml"; // project config filename
 
 /// Parsed contents of `forge.toml`. All fields are optional so a partial
 /// config (or no config at all) is always valid.

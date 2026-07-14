@@ -1,5 +1,5 @@
 use super::*;
-use soroban_sdk::testutils::Address as _;
+use soroban_sdk::testutils::Address as _; // minor: keep import explicit
 use soroban_sdk::{Address, Env, String};
 
 fn setup(env: &Env) -> (TokenContractClient<'_>, Address) {

@@ -9,7 +9,7 @@ pub struct HelloContract;
 impl HelloContract {
     /// Returns a greeting for `to`.
     pub fn hello(env: Env, to: String) -> Vec<String> {
-        vec![&env, String::from_str(&env, "Hello"), to]
+        vec![&env, String::from_str(&env, "Hello"), to] // simple greeting
     }
 }
 

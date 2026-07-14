@@ -12,7 +12,7 @@ use crate::error::Result;
 
 /// Everything a plugin gets to see about the invocation environment.
 pub struct ForgeContext {
-    /// Directory the CLI was invoked from.
+    /// Directory the CLI was invoked from. // cwd provided by caller
     pub cwd: PathBuf,
     /// Parsed `forge.toml` from `cwd`, when present.
     pub config: Option<ForgeConfig>,

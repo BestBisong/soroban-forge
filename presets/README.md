@@ -1,7 +1,7 @@
 # CI presets
 
 Workflow templates consumed by `soroban-forge ci-init --provider <p>`.
-Owned by Module 4 — see [`crates/ci-presets`](../crates/ci-presets).
+Owned by Module 4 — see [`crates/ci-presets`](../crates/ci-presets). (updated)
 
 Each provider is a subdirectory; `github/` is the only provider in v0.1:
 

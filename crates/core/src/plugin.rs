@@ -30,6 +30,13 @@ impl ForgeContext {
             verbose,
         })
     }
+
+    /// Print `msg` to stdout only when `--verbose` was passed.
+    pub fn log_verbose(&self, msg: &str) {
+        if self.verbose {
+            println!("[forge verbose] {msg}");
+        }
+    }
 }
 
 /// A soroban-forge subcommand provider.

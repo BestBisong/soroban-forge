@@ -16,6 +16,8 @@ time with `include_dir`. Three ship with v0.1:
 | `token`       | Fungible token implementing `soroban_sdk::token::TokenInterface` (SEP-41) |
 | `crowdfund`   | Escrow/deadline crowdfunding example with success & refund paths |
 
+> **More templates are welcome!** See _Adding a template_ below.
+
 Every generated project compiles with `cargo build` and passes `cargo test`
 out of the box, and includes a `forge.toml` so later `soroban-forge` commands
 know the project name/author.

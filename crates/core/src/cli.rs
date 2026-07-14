@@ -9,7 +9,7 @@ use crate::plugin::{ForgeContext, ForgePlugin};
 pub fn build_command(plugins: &[Box<dyn ForgePlugin>]) -> Command {
     let mut cmd = Command::new("soroban-forge")
         .version(env!("CARGO_PKG_VERSION"))
-        .about("Scaffolding, test-harness and CI toolkit for Soroban smart contracts on Stellar")
+        .about("Scaffolding, test-harness and CI toolkit for Soroban smart contracts on Stellar (CLI)")
         .subcommand_required(true)
         .arg_required_else_help(true)
         .arg(

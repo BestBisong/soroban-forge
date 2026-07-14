@@ -19,6 +19,14 @@ pub fn build_command(plugins: &[Box<dyn ForgePlugin>]) -> Command {
                 .global(true)
                 .action(ArgAction::SetTrue)
                 .help("Enable verbose (debug) logging"),
+        )
+        .arg(
+            Arg::new("quiet")
+                .long("quiet")
+                .short('q')
+                .global(true)
+                .action(ArgAction::SetTrue)
+                .help("Suppress informational command output"),
         );
     for plugin in plugins {
         cmd = cmd.subcommand(plugin.command());

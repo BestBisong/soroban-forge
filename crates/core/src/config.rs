@@ -116,4 +116,11 @@ default_template = "token"
         std::fs::write(dir.path().join(CONFIG_FILE_NAME), "not [valid").unwrap();
         assert!(ForgeConfig::load_from(dir.path()).is_err());
     }
+
+    #[test]
+    fn load_or_default_returns_default_when_absent() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = ForgeConfig::load_or_default(dir.path()).unwrap();
+        assert_eq!(config, ForgeConfig::default());
+    }
 }

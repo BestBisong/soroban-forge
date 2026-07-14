@@ -62,6 +62,12 @@ impl ForgeConfig {
     pub fn author(&self) -> Option<&str> {
         self.project.authors.first().map(String::as_str)
     }
+
+    /// Load `forge.toml` from `dir`, or return a default config when the file
+    /// is absent. Equivalent to `load_from(dir).map(|o| o.unwrap_or_default())`.
+    pub fn load_or_default(dir: &Path) -> Result<Self> {
+        Ok(Self::load_from(dir)?.unwrap_or_default())
+    }
 }
 
 #[cfg(test)]

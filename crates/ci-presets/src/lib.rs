@@ -126,10 +126,15 @@ pub fn generate(
 }
 
 /// Render the report for generated CI workflows.
-pub fn format_report(provider: &str, name: &str, written: &[&str], deploy: bool) -> String {
+pub fn format_report(
+    provider: &str,
+    name: &str,
+    written: &[impl AsRef<str>],
+    deploy: bool,
+) -> String {
     let mut out = format!("wrote {provider} workflows for `{name}`:\n");
     for path in written {
-        out.push_str(&format!("  {path}\n"));
+        out.push_str(&format!("  {}\n", path.as_ref()));
     }
     if deploy {
         out.push_str("\nthe deploy workflow needs a GitHub secret named STELLAR_DEPLOYER_SECRET\n");

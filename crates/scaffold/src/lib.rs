@@ -215,7 +215,9 @@ impl ForgePlugin for ScaffoldPlugin {
 
     fn run(&self, matches: &ArgMatches, ctx: &ForgeContext) -> Result<()> {
         if matches.get_flag("list") {
-            print!("{}", format_template_list(&available_templates()));
+            if !ctx.quiet {
+                print!("{}", format_template_list(&available_templates()));
+            }
             return Ok(());
         }
 
@@ -256,7 +258,9 @@ impl ForgePlugin for ScaffoldPlugin {
             matches.get_flag("force"),
         )?;
 
-        print!("{}", format_created_report(name, &template, &dest));
+        if !ctx.quiet {
+            print!("{}", format_created_report(name, &template, &dest));
+        }
         Ok(())
     }
 }

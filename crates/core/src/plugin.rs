@@ -25,12 +25,17 @@ pub struct ForgeContext {
 impl ForgeContext {
     /// Build a context for `cwd`, loading `forge.toml` if present.
     pub fn new(cwd: PathBuf, verbose: bool) -> Result<Self> {
+        Self::with_output(cwd, verbose, false)
+    }
+
+    /// Build a context with explicit output controls.
+    pub fn with_output(cwd: PathBuf, verbose: bool, quiet: bool) -> Result<Self> {
         let config = ForgeConfig::load_from(&cwd)?;
         Ok(Self {
             cwd,
             config,
             verbose,
-            quiet: false,
+            quiet,
         })
     }
 }

@@ -46,6 +46,17 @@ pub fn render_str(input: &str, vars: &Vars) -> String {
     out
 }
 
+/// Convenience wrapper: read a file, render its contents, write it back.
+///
+/// Errors are annotated with the file path for clearer diagnostics.
+pub fn render_file(path: &std::path::Path, vars: &Vars) -> crate::error::Result<()> {
+    let input = std::fs::read_to_string(path)
+        .map_err(crate::error::ForgeError::io(format!("reading {}", path.display())))?;
+    let rendered = render_str(&input, vars);
+    std::fs::write(path, rendered)
+        .map_err(crate::error::ForgeError::io(format!("writing {}", path.display())))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

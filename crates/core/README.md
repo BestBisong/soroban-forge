@@ -23,6 +23,17 @@ trait ForgePlugin {
     fn command(&self) -> clap::Command;      // clap definition
     fn run(&self, matches: &ArgMatches, ctx: &ForgeContext) -> Result<()>;
 }
+
+// Config helpers
+ForgeConfig::load_from(dir: &Path) -> Result<Option<ForgeConfig>>;
+ForgeConfig::load_or_default(dir: &Path) -> Result<ForgeConfig>;  // new
+
+// Context helpers
+ForgeContext::log_verbose(&self, msg: &str);  // new — prints only with --verbose
+
+// Renderer
+render::render_str(input: &str, vars: &Vars) -> String;
+render::render_file(path: &Path, vars: &Vars) -> Result<()>;  // new
 ```
 
 Adding a new module = new crate implementing `ForgePlugin` + one line in

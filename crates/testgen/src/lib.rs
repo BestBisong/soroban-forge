@@ -166,6 +166,31 @@ pub fn generate(dir: &Path, force: bool) -> Result<(ContractInfo, Vec<&'static s
     Ok((info, written))
 }
 
+/// Render the report for a generated test harness.
+pub fn format_report(info: &ContractInfo, written: &[&str]) -> String {
+    let mut out = format!(
+        "generated test harness for contract `{}` (crate `{}`):\n",
+        info.contract_type, info.crate_name
+    );
+    for rel in written {
+        out.push_str(&format!("  {rel}\n"));
+    }
+    if !info.has_testutils {
+        out.push_str("\nwarning: dev-dependencies do not enable soroban-sdk's `testutils` feature.\n");
+        out.push_str("add this to Cargo.toml or the generated tests will not compile:\n\n");
+        out.push_str("  [dev-dependencies]\n");
+        out.push_str("  soroban-sdk = { version = \"*\", features = [\"testutils\"] }\n");
+    }
+    if info.has_constructor {
+        out.push_str(&format!(
+            "\nnote: `{}` has a __constructor, so the smoke test is #[ignore]d until you fill in its arguments.\n",
+            info.contract_type
+        ));
+    }
+    out.push_str("\nrun them with: cargo test\n");
+    out
+}
+
 /// The `test-init` subcommand.
 pub struct TestgenPlugin;
 
@@ -198,30 +223,7 @@ impl ForgePlugin for TestgenPlugin {
 
         let (info, written) = generate(&dir, matches.get_flag("force"))?;
 
-        println!(
-            "generated test harness for contract `{}` (crate `{}`):",
-            info.contract_type, info.crate_name
-        );
-        for rel in written {
-            println!("  {rel}");
-        }
-        if !info.has_testutils {
-            println!();
-            println!("warning: dev-dependencies do not enable soroban-sdk's `testutils` feature.");
-            println!("add this to Cargo.toml or the generated tests will not compile:");
-            println!();
-            println!("  [dev-dependencies]");
-            println!("  soroban-sdk = {{ version = \"*\", features = [\"testutils\"] }}");
-        }
-        if info.has_constructor {
-            println!();
-            println!(
-                "note: `{}` has a __constructor, so the smoke test is #[ignore]d until you fill in its arguments.",
-                info.contract_type
-            );
-        }
-        println!();
-        println!("run them with: cargo test");
+        print!("{}", format_report(&info, &written));
         Ok(())
     }
 }

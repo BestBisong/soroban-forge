@@ -24,7 +24,7 @@ static TEMPLATES: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../../templates");
 
 /// The soroban-sdk version pinned into generated projects.
 /// TODO(verify): bump when a new stable soroban-sdk major is released.
-pub const SOROBAN_SDK_VERSION: &str = "26.1.0";
+pub const SOROBAN_SDK_VERSION: &str = "26.1.0"; // pinned sdk version
 
 const DEFAULT_TEMPLATE: &str = "hello-world";
 

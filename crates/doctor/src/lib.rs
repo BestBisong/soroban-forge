@@ -289,9 +289,24 @@ mod tests {
     #[test]
     fn failure_count_ignores_passes_and_warnings() {
         let checks = [
-            Check { name: "pass", status: Status::Pass, detail: String::new(), fix: None },
-            Check { name: "warn", status: Status::Warn, detail: String::new(), fix: None },
-            Check { name: "fail", status: Status::Fail, detail: String::new(), fix: None },
+            Check {
+                name: "pass",
+                status: Status::Pass,
+                detail: String::new(),
+                fix: None,
+            },
+            Check {
+                name: "warn",
+                status: Status::Warn,
+                detail: String::new(),
+                fix: None,
+            },
+            Check {
+                name: "fail",
+                status: Status::Fail,
+                detail: String::new(),
+                fix: None,
+            },
         ];
         assert_eq!(failure_count(&checks), 1);
     }

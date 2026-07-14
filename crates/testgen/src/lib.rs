@@ -176,7 +176,9 @@ pub fn format_report(info: &ContractInfo, written: &[&str]) -> String {
         out.push_str(&format!("  {rel}\n"));
     }
     if !info.has_testutils {
-        out.push_str("\nwarning: dev-dependencies do not enable soroban-sdk's `testutils` feature.\n");
+        out.push_str(
+            "\nwarning: dev-dependencies do not enable soroban-sdk's `testutils` feature.\n",
+        );
         out.push_str("add this to Cargo.toml or the generated tests will not compile:\n\n");
         out.push_str("  [dev-dependencies]\n");
         out.push_str("  soroban-sdk = { version = \"*\", features = [\"testutils\"] }\n");

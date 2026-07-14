@@ -68,7 +68,6 @@ mod tests {
         assert!(!ctx.quiet);
     }
 
-
     #[test]
     fn context_accepts_explicit_quiet_mode() {
         let dir = tempfile::tempdir().unwrap();

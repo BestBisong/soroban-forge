@@ -214,6 +214,12 @@ mod tests {
     }
 
     #[test]
+    fn base_report_omits_deploy_guidance() {
+        let report = format_report("github", "demo", &["build.yml"], false);
+        assert!(!report.contains("STELLAR_DEPLOYER_SECRET"));
+    }
+
+    #[test]
     fn unknown_provider_error_lists_available() {
         let dir = tempfile::tempdir().unwrap();
         let err = generate(dir.path(), "gitlab", "demo", false, false).unwrap_err();

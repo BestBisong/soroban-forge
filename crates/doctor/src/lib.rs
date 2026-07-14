@@ -295,4 +295,15 @@ mod tests {
         ];
         assert_eq!(failure_count(&checks), 1);
     }
+
+    #[test]
+    fn successful_checks_have_zero_failures() {
+        let checks = [Check {
+            name: "rustc",
+            status: Status::Pass,
+            detail: "rustc 1.84.0".into(),
+            fix: None,
+        }];
+        assert_eq!(failure_count(&checks), 0);
+    }
 }

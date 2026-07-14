@@ -58,7 +58,7 @@ pub fn inspect(dir: &Path) -> Result<ContractInfo> {
 
     let contract_type = find_contract_type(&source).ok_or_else(|| {
         ForgeError::Other(format!(
-            "no #[contract] struct found in {}",
+            "no #[contract] struct found in {} (inspected)",
             lib_path.display()
         ))
     })?;

@@ -77,6 +77,15 @@ up an issue — [ISSUES.md](ISSUES.md) lists well-scoped starter work.
 
 `soroban-forge doctor` checks all of this for you.
 
+## Contributing
+
+Contributions are welcome! Please read [CONTRIBUTING.md](CONTRIBUTING.md) for the ownership map, branch conventions and how to pick up a starter issue from [ISSUES.md](ISSUES.md).
+
+```sh
+# run all crate tests locally before opening a PR
+cargo test --workspace
+```
+
 ## License
 
 [Apache-2.0](LICENSE)

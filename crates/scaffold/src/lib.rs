@@ -38,6 +38,15 @@ pub fn available_templates() -> Vec<&'static str> {
     names
 }
 
+/// Render the template catalogue shown by `new --list-templates`.
+pub fn format_template_list(templates: &[&str]) -> String {
+    let mut out = String::from("available templates:\n");
+    for name in templates {
+        out.push_str(&format!("  {name}\n"));
+    }
+    out
+}
+
 /// A project name must be a valid cargo package name: lowercase ASCII
 /// letters, digits, `-` or `_`, starting with a letter.
 pub fn validate_project_name(name: &str) -> Result<()> {
@@ -143,6 +152,20 @@ fn default_author(ctx: &ForgeContext) -> String {
         .unwrap_or_else(|| "Your Name".to_string())
 }
 
+/// Render the successful project creation report.
+pub fn format_created_report(name: &str, template: &str, dest: &Path) -> String {
+    format!(
+        "created `{name}` from template `{template}` at {}\n\n\
+         next steps:\n\
+           cd {name}\n\
+           cargo test                      # run the template's unit tests\n\
+           stellar contract build          # build the deployable wasm\n\
+           soroban-forge test-init         # add a generated test harness\n\
+           soroban-forge ci-init           # add GitHub Actions workflows\n",
+        dest.display()
+    )
+}
+
 /// The `new` subcommand.
 pub struct ScaffoldPlugin;
 
@@ -192,9 +215,8 @@ impl ForgePlugin for ScaffoldPlugin {
 
     fn run(&self, matches: &ArgMatches, ctx: &ForgeContext) -> Result<()> {
         if matches.get_flag("list") {
-            println!("available templates:");
-            for name in available_templates() {
-                println!("  {name}");
+            if !ctx.quiet {
+                print!("{}", format_template_list(&available_templates()));
             }
             return Ok(());
         }
@@ -236,17 +258,9 @@ impl ForgePlugin for ScaffoldPlugin {
             matches.get_flag("force"),
         )?;
 
-        println!(
-            "created `{name}` from template `{template}` at {}",
-            dest.display()
-        );
-        println!();
-        println!("next steps:");
-        println!("  cd {name}");
-        println!("  cargo test                      # run the template's unit tests");
-        println!("  stellar contract build          # build the deployable wasm");
-        println!("  soroban-forge test-init         # add a generated test harness");
-        println!("  soroban-forge ci-init           # add GitHub Actions workflows");
+        if !ctx.quiet {
+            print!("{}", format_created_report(name, &template, &dest));
+        }
         Ok(())
     }
 }
@@ -261,6 +275,28 @@ mod tests {
             available_templates(),
             vec!["crowdfund", "hello-world", "token"]
         );
+    }
+
+    #[test]
+    fn template_list_report_has_heading_and_items() {
+        let report = format_template_list(&["hello-world", "token"]);
+        assert_eq!(report, "available templates:\n  hello-world\n  token\n");
+    }
+
+    #[test]
+    fn creation_report_identifies_project_and_template() {
+        let report = format_created_report("demo", "token", Path::new("/tmp/demo"));
+        assert!(report.starts_with("created `demo` from template `token` at /tmp/demo\n"));
+    }
+
+    #[test]
+    fn creation_report_includes_next_steps() {
+        let report = format_created_report("demo", "token", Path::new("demo"));
+        assert!(report.contains("cd demo"));
+        assert!(report.contains("cargo test"));
+        assert!(report.contains("stellar contract build"));
+        assert!(report.contains("soroban-forge test-init"));
+        assert!(report.contains("soroban-forge ci-init"));
     }
 
     #[test]

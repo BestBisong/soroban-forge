@@ -18,6 +18,9 @@ soroban-forge-testgen = { path = "crates/testgen" }
 soroban-forge-ci-presets = { path = "crates/ci-presets" }
 soroban-forge-doctor = { path = "crates/doctor" }
 
+[dev-dependencies]
+tempfile.workspace = true
+
 [workspace]
 members = ["crates/*"]
 # Templates and generated examples are standalone cargo projects, not workspace members.

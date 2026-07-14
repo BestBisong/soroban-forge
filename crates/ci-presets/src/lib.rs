@@ -201,6 +201,12 @@ mod tests {
     }
 
     #[test]
+    fn report_lists_provider_project_and_files() {
+        let report = format_report("github", "demo", &["a.yml", "b.yml"], false);
+        assert_eq!(report, "wrote github workflows for `demo`:\n  a.yml\n  b.yml\n");
+    }
+
+    #[test]
     fn unknown_provider_error_lists_available() {
         let dir = tempfile::tempdir().unwrap();
         let err = generate(dir.path(), "gitlab", "demo", false, false).unwrap_err();

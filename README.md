@@ -1,5 +1,9 @@
 # soroban-forge
 
+[![CI](https://github.com/soroban-forge-labs/soroban-forge/actions/workflows/ci.yml/badge.svg)](https://github.com/soroban-forge-labs/soroban-forge/actions)
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![Rust ≥ 1.84](https://img.shields.io/badge/rust-%E2%89%A51.84-orange.svg)](https://www.rust-lang.org)
+
 **Scaffolding, test-harness and CI toolkit for [Soroban](https://developers.stellar.org/docs/build/smart-contracts) smart contracts on Stellar** — think `create-react-app` for Soroban development.
 
 `soroban-forge` wraps and complements the official [stellar-cli](https://github.com/stellar/stellar-cli); it never reimplements it. Building and deploying always go through `stellar contract build` / `stellar contract deploy` — forge gets you to that point faster:

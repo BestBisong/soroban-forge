@@ -223,9 +223,11 @@ impl ForgePlugin for DoctorPlugin {
             .about("Check that Rust, the wasm32v1-none target and stellar-cli are installed")
     }
 
-    fn run(&self, _matches: &ArgMatches, _ctx: &ForgeContext) -> Result<()> {
+    fn run(&self, _matches: &ArgMatches, ctx: &ForgeContext) -> Result<()> {
         let checks = run_checks();
-        print!("{}", format_report(&checks));
+        if !ctx.quiet {
+            print!("{}", format_report(&checks));
+        }
         let failures = failure_count(&checks);
         if failures > 0 {
             Err(ForgeError::Doctor(format!(

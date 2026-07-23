@@ -29,6 +29,13 @@ pub fn build_command(plugins: &[Box<dyn ForgePlugin>]) -> Command {
                 .global(true)
                 .action(ArgAction::SetTrue)
                 .help("Suppress informational command output"),
+        )
+        .arg(
+            Arg::new("json")
+                .long("json")
+                .global(true)
+                .action(ArgAction::SetTrue)
+                .help("Emit machine-readable JSON output"),
         );
     for plugin in plugins {
         cmd = cmd.subcommand(plugin.command());
@@ -40,6 +47,7 @@ pub fn build_command(plugins: &[Box<dyn ForgePlugin>]) -> Command {
 pub fn dispatch(plugins: &[Box<dyn ForgePlugin>], matches: &ArgMatches) -> Result<()> {
     let verbose = matches.get_flag("verbose");
     let quiet = matches.get_flag("quiet");
+    let json = matches.get_flag("json");
     let (name, sub_matches) = matches
         .subcommand()
         .ok_or_else(|| ForgeError::InvalidArgument("a subcommand is required".into()))?;
@@ -50,7 +58,7 @@ pub fn dispatch(plugins: &[Box<dyn ForgePlugin>], matches: &ArgMatches) -> Resul
         .ok_or_else(|| ForgeError::InvalidArgument(format!("unknown subcommand `{name}`")))?;
 
     let cwd = std::env::current_dir().map_err(ForgeError::io("determining current directory"))?;
-    let ctx = ForgeContext::with_output(cwd, verbose, quiet)?;
+    let ctx = ForgeContext::with_output(cwd, verbose, quiet, json)?;
 
     log::debug!("dispatching to plugin `{}`", plugin.name());
     plugin.run(sub_matches, &ctx)
@@ -166,5 +174,14 @@ mod tests {
             .unwrap();
         assert!(matches.get_flag("quiet"));
         assert!(matches.get_flag("verbose"));
+    }
+
+    #[test]
+    fn json_is_global_flag() {
+        let (plugins, _) = dummy();
+        let matches = build_command(&plugins)
+            .try_get_matches_from(["soroban-forge", "--json", "dummy", "--flag"])
+            .unwrap();
+        assert!(matches.get_flag("json"));
     }
 }

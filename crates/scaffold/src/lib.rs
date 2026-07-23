@@ -28,6 +28,26 @@ pub const SOROBAN_SDK_VERSION: &str = "26.1.0"; // pinned sdk version
 
 const DEFAULT_TEMPLATE: &str = "hello-world";
 
+/// Pre-commit configuration with rustfmt and clippy hooks.
+const PRE_COMMIT_CONFIG: &str = r#"# See https://pre-commit.com for more information
+# See https://pre-commit.com/hooks.html for more hooks
+repos:
+  - repo: local
+    hooks:
+      - id: rustfmt
+        name: rustfmt
+        entry: cargo fmt --
+        language: system
+        types: [rust]
+        pass_filenames: false
+      - id: clippy
+        name: clippy
+        entry: cargo clippy --all-targets --all-features -- -D warnings
+        language: system
+        types: [rust]
+        pass_filenames: false
+"#;
+
 /// Names of the bundled templates, sorted.
 pub fn available_templates() -> Vec<&'static str> {
     let mut names: Vec<&'static str> = TEMPLATES
@@ -123,6 +143,17 @@ fn write_forge_toml(dest: &Path, vars: &Vars) -> Result<()> {
     std::fs::write(&path, contents).map_err(ForgeError::io(format!("writing {}", path.display())))
 }
 
+/// Write `.pre-commit-config.yaml` into `dest`.
+/// Respects `force` the same way `generate()` does.
+fn write_pre_commit_config(dest: &Path, force: bool) -> Result<()> {
+    let path = dest.join(".pre-commit-config.yaml");
+    if path.exists() && !force {
+        return Err(ForgeError::AlreadyExists(path));
+    }
+    std::fs::write(&path, PRE_COMMIT_CONFIG)
+        .map_err(ForgeError::io(format!("writing {}", path.display())))
+}
+
 fn default_author(ctx: &ForgeContext) -> String {
     if let Some(author) = ctx
         .config
@@ -183,6 +214,12 @@ impl ForgePlugin for ScaffoldPlugin {
                     .help("List available templates and exit"),
             )
             .arg(
+                Arg::new("pre-commit")
+                    .long("pre-commit")
+                    .action(ArgAction::SetTrue)
+                    .help("Add a .pre-commit-config.yaml with rustfmt and clippy hooks"),
+            )
+            .arg(
                 Arg::new("force")
                     .long("force")
                     .action(ArgAction::SetTrue)
@@ -225,16 +262,17 @@ impl ForgePlugin for ScaffoldPlugin {
             .unwrap_or_else(|| ctx.cwd.clone());
         let dest = parent.join(name);
 
+        let force = matches.get_flag("force");
+
         log::debug!(
             "scaffolding `{name}` from template `{template}` into {}",
             dest.display()
         );
-        generate(
-            &template,
-            &dest,
-            &project_vars(name, &author),
-            matches.get_flag("force"),
-        )?;
+        generate(&template, &dest, &project_vars(name, &author), force)?;
+
+        if matches.get_flag("pre-commit") {
+            write_pre_commit_config(&dest, force)?;
+        }
 
         println!(
             "created `{name}` from template `{template}` at {}",
@@ -247,6 +285,9 @@ impl ForgePlugin for ScaffoldPlugin {
         println!("  stellar contract build          # build the deployable wasm");
         println!("  soroban-forge test-init         # add a generated test harness");
         println!("  soroban-forge ci-init           # add GitHub Actions workflows");
+        if matches.get_flag("pre-commit") {
+            println!("  pre-commit install              # enable the git hooks");
+        }
         Ok(())
     }
 }
@@ -345,6 +386,53 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn pre_commit_config_contains_rustfmt_and_clippy() {
+        assert!(PRE_COMMIT_CONFIG.contains("rustfmt"));
+        assert!(PRE_COMMIT_CONFIG.contains("clippy"));
+        assert!(PRE_COMMIT_CONFIG.contains("cargo fmt"));
+        assert!(PRE_COMMIT_CONFIG.contains("cargo clippy"));
+        assert!(PRE_COMMIT_CONFIG.contains("pass_filenames: false"));
+    }
+
+    #[test]
+    fn writes_pre_commit_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("demo");
+        generate("hello-world", &dest, &project_vars("demo", "A"), false).unwrap();
+        write_pre_commit_config(&dest, false).unwrap();
+
+        let path = dest.join(".pre-commit-config.yaml");
+        assert!(path.is_file());
+        let contents = std::fs::read_to_string(&path).unwrap();
+        assert!(contents.contains("rustfmt"));
+        assert!(contents.contains("clippy"));
+        assert!(contents.contains("repos:"));
+        assert!(contents.contains("hooks:"));
+        assert!(contents.contains("repo: local"));
+    }
+
+    #[test]
+    fn refuses_to_overwrite_pre_commit_without_force() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("demo");
+        generate("hello-world", &dest, &project_vars("demo", "A"), false).unwrap();
+        write_pre_commit_config(&dest, false).unwrap();
+        assert!(matches!(
+            write_pre_commit_config(&dest, false),
+            Err(ForgeError::AlreadyExists(_))
+        ));
+        write_pre_commit_config(&dest, true).unwrap();
+    }
+
+    #[test]
+    fn pre_commit_not_written_without_flag() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("demo");
+        generate("hello-world", &dest, &project_vars("demo", "A"), false).unwrap();
+        assert!(!dest.join(".pre-commit-config.yaml").exists());
     }
 
     fn walk(dir: &Path) -> Vec<std::path::PathBuf> {

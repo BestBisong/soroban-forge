@@ -3,6 +3,8 @@
 - **[Tutorial: zero to deployed testnet contract](tutorial-zero-to-testnet.md)** —
   the full walkthrough for newcomers, no prior Soroban knowledge required.
 - **[Architecture](architecture.md)** — how the five modules fit together.
+- **[Troubleshooting / FAQ](troubleshooting.md)** — fixes for common setup
+  and build failures.
 
 Per-module reference docs live next to the code, one README per module:
 

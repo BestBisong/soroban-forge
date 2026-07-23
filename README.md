@@ -32,8 +32,12 @@ soroban-forge test-init --force
 soroban-forge ci-init --deploy
 ```
 
+new:
 New to Soroban entirely? Follow the full walkthrough:
 [docs/tutorial-zero-to-testnet.md](docs/tutorial-zero-to-testnet.md).
+
+Hitting an error? Check the
+[troubleshooting / FAQ](docs/troubleshooting.md) page first.
 
 ## Commands
 

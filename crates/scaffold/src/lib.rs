@@ -197,6 +197,19 @@ fn write_pre_commit_config(dest: &Path, force: bool) -> Result<()> {
         .map_err(ForgeError::io(format!("writing {}", path.display())))
 }
 
+/// Initialize a git repository in `dest`.
+pub fn init_git(dest: &Path) -> Result<()> {
+    let status = std::process::Command::new("git")
+        .arg("init")
+        .arg(dest)
+        .status();
+    match status {
+        Ok(s) if s.success() => Ok(()),
+        Ok(s) => Err(ForgeError::Other(format!("`git init` exited with status {s}"))),
+        Err(e) => Err(ForgeError::io("executing `git init`")(e)),
+    }
+}
+
 fn default_author(ctx: &ForgeContext) -> String {
     if let Some(author) = ctx
         .config
@@ -277,6 +290,12 @@ impl ForgePlugin for ScaffoldPlugin {
                     .help("Add a .pre-commit-config.yaml with rustfmt and clippy hooks"),
             )
             .arg(
+                Arg::new("no-git")
+                    .long("no-git")
+                    .action(ArgAction::SetTrue)
+                    .help("Skip git repository initialization"),
+            )
+            .arg(
                 Arg::new("force")
                     .long("force")
                     .action(ArgAction::SetTrue)
@@ -325,6 +344,12 @@ impl ForgePlugin for ScaffoldPlugin {
             dest.display()
         );
         generate(&template, &dest, &project_vars(name, &author), force)?;
+
+        if !matches.get_flag("no-git") {
+            if let Err(err) = init_git(&dest) {
+                log::warn!("failed to initialize git repository: {err}");
+            }
+        }
 
         if matches.get_flag("pre-commit") {
             write_pre_commit_config(&dest, force)?;
@@ -576,6 +601,26 @@ mod tests {
         let dest = dir.path().join("demo");
         generate("hello-world", &dest, &project_vars("demo", "A"), false).unwrap();
         assert!(!dest.join(".pre-commit-config.yaml").exists());
+    }
+
+    #[test]
+    fn no_git_flag_is_registered() {
+        let plugin = ScaffoldPlugin;
+        let cmd = plugin.command();
+        let matches = cmd
+            .try_get_matches_from(vec!["new", "my-project", "--no-git"])
+            .unwrap();
+        assert!(matches.get_flag("no-git"));
+    }
+
+    #[test]
+    fn init_git_creates_git_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("demo");
+        std::fs::create_dir_all(&dest).unwrap();
+        if init_git(&dest).is_ok() {
+            assert!(dest.join(".git").exists());
+        }
     }
 
     fn walk(dir: &Path) -> Vec<std::path::PathBuf> {

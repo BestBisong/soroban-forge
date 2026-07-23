@@ -80,7 +80,19 @@ pub fn run(plugins: Vec<Box<dyn ForgePlugin>>) -> Result<()> {
         .try_init()
         .ok();
 
-    dispatch(&plugins, &matches)
+    let is_json = matches.get_flag("json");
+    let result = dispatch(&plugins, &matches);
+    if let Err(ref err) = result {
+        if is_json {
+            let json_err = serde_json::json!({
+                "error": err.to_string(),
+                "exit_code": i32::from(err.exit_code())
+            });
+            eprintln!("{}", serde_json::to_string_pretty(&json_err).unwrap());
+            std::process::exit(err.exit_code().into());
+        }
+    }
+    result
 }
 
 #[cfg(test)]

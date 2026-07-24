@@ -88,6 +88,10 @@ up an issue — [ISSUES.md](ISSUES.md) lists well-scoped starter work.
 user error, `2` missing tool, `3` internal error) so CI/scripts can branch
 on outcome — see [docs/exit-codes.md](docs/exit-codes.md).
 
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for a full history of notable changes and release notes.
+
 ## License
 
 [Apache-2.0](LICENSE)

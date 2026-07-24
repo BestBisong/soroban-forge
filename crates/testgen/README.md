@@ -9,9 +9,12 @@ Soroban contract project and it generates
 |------------------------|----------------------------------------------------------------------|
 | `tests/common/mod.rs`  | fixtures: mocked-auth `Env`, account generator, ledger-time control, token (SAC) setup + funding, snapshot assertion helper |
 | `tests/forge_smoke.rs` | smoke test registering the detected `#[contract]` type and constructing its client |
-| `tests/forge_invariant.rs` | property-based invariant tests (proptest) over the detected `#[contract]` types |
+| `tests/forge_invariant.rs` | proptest-based invariant testing harness asserting state properties across random call sequences |
 | `fuzz/Cargo.toml`      | (with `--fuzz`) cargo-fuzz workspace manifest |
 | `fuzz/fuzz_targets/fuzz_target_1.rs` | (with `--fuzz`) property-based fuzzer feeding arbitrary values into detected contract methods |
+
+Pass `--prop` (or `--invariant`/`--property`) to `test-init` to generate the
+property-based invariant harness, and `--fuzz` to emit a cargo-fuzz target.
 
 The global `--quiet` flag suppresses the generated-file report and follow-up
 notes without changing which harness files are written.

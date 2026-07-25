@@ -1,4 +1,13 @@
 //! Command construction and dispatch.
+//!
+//! # External subcommands
+//!
+//! Unknown subcommands are dispatched to a `soroban-forge-<name>` binary on
+//! PATH (like cargo).  The external binary inherits our stdio and receives
+//! everything after the subcommand name on the original argv.  Global flags
+//! consumed by `soroban-forge` *before* the subcommand name are not forwarded.
+
+use std::ffi::OsStr;
 
 use clap::{Arg, ArgAction, ArgMatches, Command};
 
@@ -12,8 +21,16 @@ pub fn build_command(plugins: &[Box<dyn ForgePlugin>]) -> Command {
         .about(
             "Scaffolding, test-harness and CI toolkit for Soroban smart contracts on Stellar (CLI)",
         )
-        .subcommand_required(true)
+        .subcommand_required(false)
         .arg_required_else_help(true)
+        .allow_external_subcommands(true)
+        .after_help("See all installed subcommands with `soroban-forge --list`")
+        .arg(
+            Arg::new("list")
+                .long("list")
+                .action(ArgAction::SetTrue)
+                .help("List all installed subcommands"),
+        )
         .arg(
             Arg::new("verbose")
                 .long("verbose")
@@ -43,7 +60,7 @@ pub fn build_command(plugins: &[Box<dyn ForgePlugin>]) -> Command {
     cmd
 }
 
-/// Route parsed matches to the owning plugin.
+/// Route parsed matches to the owning plugin or an external subcommand.
 pub fn dispatch(plugins: &[Box<dyn ForgePlugin>], matches: &ArgMatches) -> Result<()> {
     let verbose = matches.get_flag("verbose");
     let quiet = matches.get_flag("quiet");
@@ -52,23 +69,32 @@ pub fn dispatch(plugins: &[Box<dyn ForgePlugin>], matches: &ArgMatches) -> Resul
         .subcommand()
         .ok_or_else(|| ForgeError::InvalidArgument("a subcommand is required".into()))?;
 
-    let plugin = plugins
-        .iter()
-        .find(|p| p.name() == name)
-        .ok_or_else(|| ForgeError::InvalidArgument(format!("unknown subcommand `{name}`")))?;
+    // Try a built-in plugin first.
+    if let Some(plugin) = plugins.iter().find(|p| p.name() == name) {
+        let cwd =
+            std::env::current_dir().map_err(ForgeError::io("determining current directory"))?;
+        let ctx = ForgeContext::with_output(cwd, verbose, quiet, json)?;
+        log::debug!("dispatching to plugin `{}`", plugin.name());
+        return plugin.run(sub_matches, &ctx);
+    }
 
-    let cwd = std::env::current_dir().map_err(ForgeError::io("determining current directory"))?;
-    let ctx = ForgeContext::with_output(cwd, verbose, quiet, json)?;
-
-    log::debug!("dispatching to plugin `{}`", plugin.name());
-    plugin.run(sub_matches, &ctx)
+    // Otherwise treat it as an external subcommand.
+    try_run_external(name, sub_matches)
 }
 
 /// Entry point used by the `soroban-forge` binary: parse `std::env::args`,
-/// initialise logging and dispatch. clap handles `--help`/`--version`/usage
+/// initialise logging and dispatch.  clap handles `--help`/`--version`/usage
 /// errors itself (printing and exiting), as users expect.
 pub fn run(plugins: Vec<Box<dyn ForgePlugin>>) -> Result<()> {
-    let matches = build_command(&plugins).get_matches();
+    let cmd = build_command(&plugins);
+    let matches = cmd.get_matches();
+
+    // --list must be handled before logging / dispatch so it works even
+    // when there is no subcommand.
+    if matches.get_flag("list") {
+        list_subcommands(&plugins);
+        return Ok(());
+    }
 
     let level = if matches.get_flag("verbose") {
         "debug"
@@ -93,6 +119,91 @@ pub fn run(plugins: Vec<Box<dyn ForgePlugin>>) -> Result<()> {
         }
     }
     result
+}
+
+// ---------------------------------------------------------------------------
+// External subcommand helpers
+// ---------------------------------------------------------------------------
+
+/// Look up `soroban-forge-{name}` on PATH and exec it with the remaining
+/// arguments.  The child inherits our stdio and its exit code becomes ours.
+fn try_run_external(name: &str, sub_matches: &ArgMatches) -> Result<()> {
+    let bin = format!("soroban-forge-{name}");
+
+    let ext_args: Vec<&OsStr> = sub_matches
+        .get_many::<std::ffi::OsString>("")
+        .unwrap_or_default()
+        .map(|s| s.as_os_str())
+        .collect();
+
+    let mut cmd = std::process::Command::new(&bin);
+    cmd.args(&ext_args);
+    cmd.stdin(std::process::Stdio::inherit());
+    cmd.stdout(std::process::Stdio::inherit());
+    cmd.stderr(std::process::Stdio::inherit());
+
+    match cmd.status() {
+        Ok(status) => {
+            std::process::exit(status.code().unwrap_or(1));
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            Err(ForgeError::InvalidArgument(format!(
+                "unknown subcommand `{name}`"
+            )))
+        }
+        Err(e) => Err(ForgeError::Io {
+            context: format!("running `{bin}`"),
+            source: e,
+        }),
+    }
+}
+
+/// Print all subcommands (built-in + external) to stdout.
+fn list_subcommands(plugins: &[Box<dyn ForgePlugin>]) {
+    println!("Installed subcommands:");
+    println!();
+
+    let mut builtins: Vec<&str> = plugins.iter().map(|p| p.name()).collect();
+    builtins.sort();
+    println!("  Built-in:");
+    for name in &builtins {
+        println!("    {name}");
+    }
+
+    let externals = find_external_subcommands();
+    if !externals.is_empty() {
+        println!("  External:");
+        for name in &externals {
+            println!("    {name}");
+        }
+    }
+}
+
+/// Scan `PATH` for `soroban-forge-*` binaries and return their subcommand
+/// names (the part after the prefix), deduplicated and sorted.
+fn find_external_subcommands() -> Vec<String> {
+    let prefix = "soroban-forge-";
+    let mut seen = Vec::new();
+
+    if let Some(path_var) = std::env::var_os("PATH") {
+        for dir in std::env::split_paths(&path_var) {
+            if let Ok(entries) = std::fs::read_dir(dir) {
+                for entry in entries.flatten() {
+                    let name = entry.file_name();
+                    let s = name.to_string_lossy();
+                    if s.starts_with(prefix) {
+                        let sub = s[prefix.len()..].to_string();
+                        if !seen.contains(&sub) {
+                            seen.push(sub);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    seen.sort();
+    seen
 }
 
 #[cfg(test)]
@@ -138,6 +249,21 @@ mod tests {
     }
 
     #[test]
+    fn help_lists_list_flag() {
+        let (plugins, _) = dummy();
+        let help = build_command(&plugins).render_long_help().to_string();
+        assert!(help.contains("--list"));
+        assert!(help.contains("List all installed subcommands"));
+    }
+
+    #[test]
+    fn help_shows_external_subcommand_footer() {
+        let (plugins, _) = dummy();
+        let help = build_command(&plugins).render_long_help().to_string();
+        assert!(help.contains("--list"));
+    }
+
+    #[test]
     fn help_lists_quiet_flag() {
         let (plugins, _) = dummy();
         let help = build_command(&plugins).render_long_help().to_string();
@@ -163,10 +289,24 @@ mod tests {
     }
 
     #[test]
-    fn unknown_subcommand_is_a_parse_error() {
+    fn unknown_subcommand_is_no_longer_a_parse_error() {
         let (plugins, _) = dummy();
         let result = build_command(&plugins).try_get_matches_from(["soroban-forge", "nonexistent"]);
+        assert!(result.is_ok(), "external subcommands are allowed at parse time");
+    }
+
+    #[test]
+    fn unknown_subcommand_fails_at_dispatch() {
+        let (plugins, _) = dummy();
+        let matches = build_command(&plugins)
+            .try_get_matches_from(["soroban-forge", "nonexistent"])
+            .unwrap();
+        let result = dispatch(&plugins, &matches);
         assert!(result.is_err());
+        assert!(
+            result.unwrap_err().to_string().contains("nonexistent"),
+            "error should mention the unknown name"
+        );
     }
 
     #[test]

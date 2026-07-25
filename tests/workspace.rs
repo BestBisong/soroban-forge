@@ -123,6 +123,10 @@ fn test_init_harnesses_each_workspace_member() {
             "missing smoke test for {member}"
         );
         assert!(
+            tests.join("forge_snapshots.rs").is_file(),
+            "missing snapshot test for {member}"
+        );
+        assert!(
             tests.join("common/mod.rs").is_file(),
             "missing fixtures for {member}"
         );

@@ -187,7 +187,7 @@ pub fn parse_constructor_args(source: &str) -> Option<String> {
     }
 }
 
-fn map_type_to_default(ty: &str) -> String {
+pub fn map_type_to_default(ty: &str) -> String {
     let ty_clean = ty
         .replace('&', "")
         .replace("'a", "")

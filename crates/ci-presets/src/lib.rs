@@ -324,6 +324,28 @@ mod tests {
     }
 
     #[test]
+    fn contract_size_workflow_compares_base_and_comments() {
+        let dir = tempfile::tempdir().unwrap();
+        generate(dir.path(), "github", "demo", false, false).unwrap();
+        let size = std::fs::read_to_string(
+            dir.path().join(".github/workflows/contract-size.yml"),
+        )
+        .unwrap();
+        // The base-branch comparison step is present.
+        assert!(size.contains("Build contract (base branch)"), "{size}");
+        // The PR comment step is present.
+        assert!(size.contains("Comment size delta on PR"), "{size}");
+        assert!(size.contains("actions/github-script"), "{size}");
+        // GitHub expressions survive the renderer.
+        assert!(
+            size.contains("${{ github.event.pull_request.base.sha }}"),
+            "GitHub expression was eaten by the renderer"
+        );
+        // pull-requests write permission is declared.
+        assert!(size.contains("pull-requests: write"), "{size}");
+    }
+
+        #[test]
     fn refuses_overwrite_without_force() {
         let dir = tempfile::tempdir().unwrap();
         generate(dir.path(), "github", "demo", false, false).unwrap();

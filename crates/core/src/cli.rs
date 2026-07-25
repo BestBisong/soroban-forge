@@ -191,8 +191,8 @@ fn find_external_subcommands() -> Vec<String> {
                 for entry in entries.flatten() {
                     let name = entry.file_name();
                     let s = name.to_string_lossy();
-                    if s.starts_with(prefix) {
-                        let sub = s[prefix.len()..].to_string();
+                    if let Some(stripped) = s.strip_prefix(prefix) {
+                        let sub = stripped.to_string();
                         if !seen.contains(&sub) {
                             seen.push(sub);
                         }

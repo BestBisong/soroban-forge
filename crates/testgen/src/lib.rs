@@ -389,6 +389,102 @@ pub fn generate_fuzz_target(info: &ContractInfo) -> String {
     out
 }
 
+/// True when `dir/Cargo.toml` declares a `[workspace]` table.
+pub fn is_workspace(dir: &Path) -> bool {
+    let manifest = dir.join("Cargo.toml");
+    match std::fs::read_to_string(&manifest) {
+        Ok(raw) => raw
+            .parse::<toml::Table>()
+            .map(|t| t.contains_key("workspace"))
+            .unwrap_or(false),
+        Err(_) => false,
+    }
+}
+
+/// Resolve the member crate directories of the workspace rooted at `dir` by
+/// reading `[workspace].members` and expanding trailing `/*` globs against the
+/// filesystem. Only directories that actually contain a `Cargo.toml` are
+/// returned, sorted for a stable report order.
+pub fn workspace_members(dir: &Path) -> Result<Vec<std::path::PathBuf>> {
+    let manifest = dir.join("Cargo.toml");
+    let raw = std::fs::read_to_string(&manifest)
+        .map_err(ForgeError::io(format!("reading {}", manifest.display())))?;
+    let table: toml::Table = raw.parse().map_err(|e| ForgeError::Config {
+        path: manifest.clone(),
+        message: format!("{e}"),
+    })?;
+
+    let members = table
+        .get("workspace")
+        .and_then(|w| w.get("members"))
+        .and_then(|m| m.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    let mut dirs = Vec::new();
+    for pattern in members {
+        if let Some(prefix) = pattern.strip_suffix("/*") {
+            let base = dir.join(prefix);
+            if let Ok(entries) = std::fs::read_dir(&base) {
+                for entry in entries.flatten() {
+                    let p = entry.path();
+                    if p.join("Cargo.toml").is_file() {
+                        dirs.push(p);
+                    }
+                }
+            }
+        } else {
+            let p = dir.join(&pattern);
+            if p.join("Cargo.toml").is_file() {
+                dirs.push(p);
+            }
+        }
+    }
+    dirs.sort();
+    Ok(dirs)
+}
+
+/// Per-member result of a workspace test-init run.
+pub struct MemberHarness {
+    pub member: String,
+    pub outcome: std::result::Result<(ContractInfo, Vec<&'static str>), String>,
+}
+
+/// Generate a harness for every member of the workspace at `dir`. Members that
+/// cannot be inspected (no `#[contract]`, missing `src/lib.rs`, etc.) are
+/// skipped and reported, rather than failing the whole run.
+pub fn generate_workspace(dir: &Path, force: bool, fuzz: bool) -> Result<Vec<MemberHarness>> {
+    let members = workspace_members(dir)?;
+    if members.is_empty() {
+        return Err(ForgeError::InvalidArgument(format!(
+            "no workspace members with a Cargo.toml found under {}",
+            dir.display()
+        )));
+    }
+
+    let mut results = Vec::new();
+    for member_dir in members {
+        let rel = member_dir
+            .strip_prefix(dir)
+            .unwrap_or(&member_dir)
+            .to_string_lossy()
+            .into_owned();
+        let outcome = match generate(&member_dir, force, fuzz) {
+            Ok(pair) => Ok(pair),
+            Err(e) => Err(e.to_string()),
+        };
+        results.push(MemberHarness {
+            member: rel,
+            outcome,
+        });
+    }
+    Ok(results)
+}
+
 /// Generate the harness into `dir`. Public API behind `test-init`.
 /// Returns the list of files written (relative to `dir`). With `fuzz`, also
 /// emits a cargo-fuzz target under `fuzz/`.
@@ -476,6 +572,35 @@ pub fn format_report(info: &ContractInfo, written: &[&str], fuzz: bool) -> Strin
     out
 }
 
+/// Render the aggregated report for a workspace test-init run.
+pub fn format_workspace_report(results: &[MemberHarness], fuzz: bool) -> String {
+    let mut out = String::from("generated test harnesses for workspace members:\n\n");
+    for r in results {
+        match &r.outcome {
+            Ok((info, written)) => {
+                out.push_str(&format!("  {} (crate `{}`):\n", r.member, info.crate_name));
+                for rel in written {
+                    out.push_str(&format!("    {rel}\n"));
+                }
+            }
+            Err(reason) => {
+                out.push_str(&format!("  {} — skipped: {reason}\n", r.member));
+            }
+        }
+    }
+    let ok = results.iter().filter(|r| r.outcome.is_ok()).count();
+    let skipped = results.len() - ok;
+    out.push_str(&format!(
+        "\n{ok} member(s) got a harness, {skipped} skipped.\n"
+    ));
+    if fuzz {
+        out.push_str("run a member fuzzer with: cargo +nightly fuzz run fuzz_target_1\n");
+    } else {
+        out.push_str("run them with: cargo test\n");
+    }
+    out
+}
+
 /// The `test-init` subcommand.
 pub struct TestgenPlugin;
 
@@ -521,6 +646,39 @@ impl ForgePlugin for TestgenPlugin {
             .unwrap_or_else(|| ctx.cwd.clone());
 
         let fuzz = matches.get_flag("fuzz");
+
+        // Workspace root: generate a harness per member.
+        if is_workspace(&dir) {
+            let results = generate_workspace(&dir, matches.get_flag("force"), fuzz)?;
+            if ctx.json {
+                let members: Vec<serde_json::Value> = results
+                    .iter()
+                    .map(|r| match &r.outcome {
+                        Ok((info, written)) => serde_json::json!({
+                            "member": r.member,
+                            "crate_name": info.crate_name,
+                            "contract_types": info.contract_types,
+                            "written_files": written,
+                            "skipped": false,
+                        }),
+                        Err(reason) => serde_json::json!({
+                            "member": r.member,
+                            "skipped": true,
+                            "reason": reason,
+                        }),
+                    })
+                    .collect();
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({ "members": members }))
+                        .unwrap()
+                );
+            } else if !ctx.quiet {
+                print!("{}", format_workspace_report(&results, fuzz));
+            }
+            return Ok(());
+        }
+
         let (info, written) = generate(&dir, matches.get_flag("force"), fuzz)?;
 
         if ctx.json {
@@ -586,7 +744,11 @@ mod tests {
 
     #[test]
     fn report_lists_generated_files() {
-        let report = format_report(&contract_info(false, true), &["tests/a.rs", "tests/b.rs"], false);
+        let report = format_report(
+            &contract_info(false, true),
+            &["tests/a.rs", "tests/b.rs"],
+            false,
+        );
         assert!(report.contains("contract `DemoContract` (crate `demo`)"));
         assert!(report.contains("  tests/a.rs\n  tests/b.rs\n"));
     }
@@ -615,7 +777,11 @@ mod tests {
 
     #[test]
     fn report_points_to_fuzzer_when_fuzzing() {
-        let report = format_report(&contract_info(false, true), &["fuzz/fuzz_targets/fuzz_target_1.rs"], true);
+        let report = format_report(
+            &contract_info(false, true),
+            &["fuzz/fuzz_targets/fuzz_target_1.rs"],
+            true,
+        );
         assert!(report.contains("cargo +nightly fuzz run fuzz_target_1"));
     }
 
@@ -683,7 +849,13 @@ mod tests {
     fn constructor_contract_gets_sensible_default_arguments() {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path().join("tok");
-        scaffold::generate("token", &dir, &scaffold::project_vars("tok", "T", "2021"), false).unwrap();
+        scaffold::generate(
+            "token",
+            &dir,
+            &scaffold::project_vars("tok", "T", "2021"),
+            false,
+        )
+        .unwrap();
 
         let (info, _) = generate(&dir, false, false).unwrap();
         assert!(info.has_constructor);
@@ -806,7 +978,9 @@ mod tests {
     #[test]
     fn report_uses_singular_for_single_contract() {
         let report = format_report(&contract_info(false, true), &["tests/a.rs"], false);
-        assert!(report.contains("generated test harness for contract `DemoContract` (crate `demo`)"));
+        assert!(
+            report.contains("generated test harness for contract `DemoContract` (crate `demo`)")
+        );
     }
 
     #[test]

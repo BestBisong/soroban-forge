@@ -148,6 +148,151 @@ pub fn generate(template: &str, dest: &Path, vars: &Vars, force: bool) -> Result
     Ok(())
 }
 
+/// Parse a `--contract` spec of the form `NAME` or `NAME:TEMPLATE`.
+/// Defaults to the `hello-world` template when no template is given.
+/// Returns `(name, template)`.
+pub fn parse_contract_spec(spec: &str) -> (String, String) {
+    match spec.split_once(':') {
+        Some((name, template)) => (name.trim().to_string(), template.trim().to_string()),
+        None => (spec.trim().to_string(), DEFAULT_TEMPLATE.to_string()),
+    }
+}
+
+/// Rewrite a rendered member `Cargo.toml` for use inside a workspace:
+/// - point `soroban-sdk` at the workspace (`soroban-sdk.workspace = true`)
+///   in both `[dependencies]` and `[dev-dependencies]` (preserving the
+///   dev `features`), and
+/// - drop `[profile.*]` sections, which Cargo only honours at the workspace
+///   root and warns about in members.
+fn member_manifest(rendered: &str) -> String {
+    let mut out = String::new();
+    let mut in_profile = false;
+    for line in rendered.lines() {
+        let trimmed = line.trim_start();
+
+        // Enter/exit a [profile.*] section (dropped entirely).
+        if trimmed.starts_with('[') {
+            in_profile = trimmed.starts_with("[profile.");
+            if in_profile {
+                continue;
+            }
+        }
+        if in_profile {
+            continue;
+        }
+
+        // Replace the two soroban-sdk dependency forms with workspace refs.
+        if trimmed.starts_with("soroban-sdk = {") {
+            // dev-dependencies: keep testutils via the workspace, still a
+            // workspace ref (features are declared on the workspace dep).
+            out.push_str("soroban-sdk = { workspace = true, features = [\"testutils\"] }\n");
+            continue;
+        }
+        if trimmed.starts_with("soroban-sdk = \"") {
+            out.push_str("soroban-sdk.workspace = true\n");
+            continue;
+        }
+
+        out.push_str(line);
+        out.push('\n');
+    }
+    out
+}
+
+/// The workspace root `Cargo.toml`, listing all members under `contracts/`
+/// and pinning the shared `soroban-sdk` version and release profile.
+fn workspace_root_manifest(members: &[String]) -> String {
+    let members_list = members
+        .iter()
+        .map(|m| format!("    \"contracts/{m}\",\n"))
+        .collect::<String>();
+    format!(
+        "[workspace]\n\
+         resolver = \"2\"\n\
+         members = [\n{members_list}]\n\
+         \n\
+         [workspace.dependencies]\n\
+         soroban-sdk = \"{SOROBAN_SDK_VERSION}\"\n\
+         \n\
+         [profile.release]\n\
+         opt-level = \"z\"\n\
+         overflow-checks = true\n\
+         debug = 0\n\
+         strip = \"symbols\"\n\
+         debug-assertions = false\n\
+         panic = \"abort\"\n\
+         codegen-units = 1\n\
+         lto = true\n\
+         \n\
+         [profile.release-with-logs]\n\
+         inherits = \"release\"\n\
+         debug-assertions = true\n"
+    )
+}
+
+/// Scaffold a Cargo workspace containing one crate per `(name, template)` under
+/// `contracts/<name>/`, plus a shared root `Cargo.toml` and a `forge.toml`.
+///
+/// Each contract is rendered with the existing single-crate template machinery,
+/// then its manifest is rewritten to consume the workspace's shared
+/// `soroban-sdk` dependency and release profile. The result builds every
+/// contract with a single `cargo build` at the root.
+pub fn generate_workspace(
+    dest: &Path,
+    project_name: &str,
+    author: &str,
+    edition: &str,
+    contracts: &[(String, String)],
+    force: bool,
+) -> Result<()> {
+    if contracts.is_empty() {
+        return Err(ForgeError::InvalidArgument(
+            "a workspace needs at least one --contract".into(),
+        ));
+    }
+    if dest.exists() && !force {
+        return Err(ForgeError::AlreadyExists(dest.to_path_buf()));
+    }
+
+    let mut members = Vec::new();
+    for (name, template) in contracts {
+        validate_project_name(name)?;
+        let member_dir = dest.join("contracts").join(name);
+        let vars = project_vars(name, author, edition);
+
+        // Render the contract as a normal single-crate project, but WITHOUT its
+        // own forge.toml (the workspace root owns that).
+        let template_dir = TEMPLATES.get_dir(template).ok_or_else(|| {
+            ForgeError::Template(format!(
+                "unknown template `{template}` (available: {})",
+                available_templates().join(", ")
+            ))
+        })?;
+        render_dir(template_dir, template, &member_dir, &vars)?;
+
+        // Rewrite the member manifest to use workspace deps + root profile.
+        let manifest_path = member_dir.join("Cargo.toml");
+        let rendered = std::fs::read_to_string(&manifest_path).map_err(ForgeError::io(format!(
+            "reading {}",
+            manifest_path.display()
+        )))?;
+        std::fs::write(&manifest_path, member_manifest(&rendered)).map_err(ForgeError::io(
+            format!("writing {}", manifest_path.display()),
+        ))?;
+
+        members.push(name.clone());
+    }
+
+    // Root Cargo.toml and forge.toml.
+    let root_manifest = dest.join("Cargo.toml");
+    std::fs::write(&root_manifest, workspace_root_manifest(&members)).map_err(ForgeError::io(
+        format!("writing {}", root_manifest.display()),
+    ))?;
+
+    let vars = project_vars(project_name, author, edition);
+    write_forge_toml(dest, &vars)?;
+    Ok(())
+}
 /// Clone a remote git repository URL into a temp directory and render it as a
 /// template, applying the same `{{variable}}` substitution rules as bundled
 /// templates. The clone is shallow (`--depth 1`) to keep it fast.
@@ -165,8 +310,9 @@ pub fn generate_from_url(url: &str, dest: &Path, vars: &Vars, force: bool) -> Re
     }
 
     // Clone into a temporary directory so we never touch dest on failure.
-    let tmp = tempfile::tempdir()
-        .map_err(ForgeError::io("creating temporary directory for remote clone"))?;
+    let tmp = tempfile::tempdir().map_err(ForgeError::io(
+        "creating temporary directory for remote clone",
+    ))?;
     let clone_dest = tmp.path().join("repo");
 
     log::debug!("cloning `{url}` into {}", clone_dest.display());
@@ -235,11 +381,14 @@ pub fn generate_from_url(url: &str, dest: &Path, vars: &Vars, force: bool) -> Re
 /// Files ending in `.hbs` have that suffix stripped on render, matching the
 /// bundled-template convention.
 fn render_dir_fs(dir: &Path, source_root: &Path, dest: &Path, vars: &Vars) -> Result<()> {
-    for entry in std::fs::read_dir(dir)
-        .map_err(ForgeError::io(format!("reading directory {}", dir.display())))?
-    {
-        let entry =
-            entry.map_err(ForgeError::io(format!("reading directory {}", dir.display())))?;
+    for entry in std::fs::read_dir(dir).map_err(ForgeError::io(format!(
+        "reading directory {}",
+        dir.display()
+    )))? {
+        let entry = entry.map_err(ForgeError::io(format!(
+            "reading directory {}",
+            dir.display()
+        )))?;
         let path = entry.path();
 
         if path.is_dir() {
@@ -348,7 +497,10 @@ pub fn init_git(dest: &Path) -> Result<()> {
         .output();
     match output {
         Ok(o) if o.status.success() => Ok(()),
-        Ok(o) => Err(ForgeError::Other(format!("`git init` exited with status {}", o.status))),
+        Ok(o) => Err(ForgeError::Other(format!(
+            "`git init` exited with status {}",
+            o.status
+        ))),
         Err(e) => Err(ForgeError::io("executing `git init`")(e)),
     }
 }
@@ -457,6 +609,19 @@ impl ForgePlugin for ScaffoldPlugin {
                     .action(ArgAction::SetTrue)
                     .help("Overwrite the target directory if it exists"),
             )
+            .arg(
+                Arg::new("workspace")
+                    .long("workspace")
+                    .action(ArgAction::SetTrue)
+                    .help("Scaffold a Cargo workspace with multiple contract crates (use with --contract)"),
+            )
+            .arg(
+                Arg::new("contract")
+                    .long("contract")
+                    .action(ArgAction::Append)
+                    .value_name("NAME[:TEMPLATE]")
+                    .help("A contract to include in the workspace, e.g. `token:token` (repeatable; requires --workspace)"),
+            )
     }
 
     fn run(&self, matches: &ArgMatches, ctx: &ForgeContext) -> Result<()> {
@@ -497,6 +662,51 @@ impl ForgePlugin for ScaffoldPlugin {
         let force = matches.get_flag("force");
         let vars = project_vars(name, &author, &edition);
 
+        // --workspace: scaffold a multi-contract Cargo workspace.
+        if matches.get_flag("workspace") {
+            let specs: Vec<(String, String)> = matches
+                .get_many::<String>("contract")
+                .map(|vals| vals.map(|s| parse_contract_spec(s)).collect())
+                .unwrap_or_default();
+            if specs.is_empty() {
+                return Err(ForgeError::InvalidArgument(
+                    "--workspace requires at least one --contract NAME[:TEMPLATE]".into(),
+                ));
+            }
+            log::debug!(
+                "scaffolding workspace `{name}` with {} contract(s) into {}",
+                specs.len(),
+                dest.display()
+            );
+            generate_workspace(&dest, name, &author, &edition, &specs, force)?;
+
+            if !matches.get_flag("no-git") {
+                if let Err(err) = init_git(&dest) {
+                    log::warn!("failed to initialize git repository: {err}");
+                }
+            }
+            if matches.get_flag("pre-commit") {
+                write_pre_commit_config(&dest, force)?;
+            }
+
+            if !ctx.quiet {
+                let members: Vec<&str> = specs.iter().map(|(n, _)| n.as_str()).collect();
+                println!(
+                    "created workspace `{name}` with contracts [{}] at {}",
+                    members.join(", "),
+                    dest.display()
+                );
+                println!();
+                println!("next steps:");
+                println!("  cd {name}");
+                println!("  cargo build                     # builds every contract");
+                println!("  cargo test                      # runs all contract tests");
+                println!("  soroban-forge test-init         # add harnesses for each member");
+                println!("  soroban-forge ci-init           # add GitHub Actions workflows");
+            }
+            return Ok(());
+        }
+
         // --from takes precedence over --template: clone a remote repo.
         if let Some(url) = matches.get_one::<String>("from") {
             log::debug!(
@@ -516,7 +726,10 @@ impl ForgePlugin for ScaffoldPlugin {
             }
 
             if !ctx.quiet {
-                println!("created `{name}` from remote template `{url}` at {}", dest.display());
+                println!(
+                    "created `{name}` from remote template `{url}` at {}",
+                    dest.display()
+                );
                 println!();
                 println!("next steps:");
                 println!("  cd {name}");
@@ -593,7 +806,10 @@ mod tests {
     #[test]
     fn template_list_report_has_heading_and_items() {
         let report = format_template_list(&["hello-world", "nft", "token"]);
-        assert_eq!(report, "available templates:\n  hello-world\n  nft\n  token\n");
+        assert_eq!(
+            report,
+            "available templates:\n  hello-world\n  nft\n  token\n"
+        );
     }
 
     #[test]
@@ -615,7 +831,10 @@ mod tests {
     fn catalog_returns_all_templates_with_descriptions() {
         let catalog = template_catalog();
         let names: Vec<&str> = catalog.iter().map(|t| t.name).collect();
-        assert_eq!(names, vec!["amm", "crowdfund", "hello-world", "nft", "token"]);
+        assert_eq!(
+            names,
+            vec!["amm", "crowdfund", "hello-world", "nft", "token"]
+        );
         for entry in &catalog {
             assert!(
                 !entry.description.is_empty(),
@@ -679,7 +898,12 @@ mod tests {
         let dest = dir.path().join("demo");
         std::fs::create_dir(&dest).unwrap();
         assert!(matches!(
-            generate("hello-world", &dest, &project_vars("demo", "A", "2021"), false),
+            generate(
+                "hello-world",
+                &dest,
+                &project_vars("demo", "A", "2021"),
+                false
+            ),
             Err(ForgeError::AlreadyExists(_))
         ));
     }
@@ -747,15 +971,39 @@ mod tests {
         for template in available_templates() {
             let dir = tempfile::tempdir().unwrap();
             let dest = dir.path().join("my-contract");
-            generate(template, &dest, &project_vars("my-contract", "A", "2021"), false).unwrap();
+            generate(
+                template,
+                &dest,
+                &project_vars("my-contract", "A", "2021"),
+                false,
+            )
+            .unwrap();
             let readme_path = dest.join("README.md");
-            assert!(readme_path.is_file(), "README.md missing for template {template}");
+            assert!(
+                readme_path.is_file(),
+                "README.md missing for template {template}"
+            );
             let contents = std::fs::read_to_string(&readme_path).unwrap();
-            assert!(contents.contains("# my-contract"), "template {template} title substitution");
-            assert!(contents.contains("cargo test"), "template {template} test step");
-            assert!(contents.contains("stellar contract build"), "template {template} build step");
-            assert!(contents.contains("stellar contract deploy"), "template {template} deploy step");
-            assert!(contents.contains("my_contract.wasm"), "template {template} crate name substitution");
+            assert!(
+                contents.contains("# my-contract"),
+                "template {template} title substitution"
+            );
+            assert!(
+                contents.contains("cargo test"),
+                "template {template} test step"
+            );
+            assert!(
+                contents.contains("stellar contract build"),
+                "template {template} build step"
+            );
+            assert!(
+                contents.contains("stellar contract deploy"),
+                "template {template} deploy step"
+            );
+            assert!(
+                contents.contains("my_contract.wasm"),
+                "template {template} crate name substitution"
+            );
         }
     }
 
@@ -772,7 +1020,13 @@ mod tests {
     fn writes_pre_commit_config() {
         let dir = tempfile::tempdir().unwrap();
         let dest = dir.path().join("demo");
-        generate("hello-world", &dest, &project_vars("demo", "A", "2021"), false).unwrap();
+        generate(
+            "hello-world",
+            &dest,
+            &project_vars("demo", "A", "2021"),
+            false,
+        )
+        .unwrap();
         write_pre_commit_config(&dest, false).unwrap();
 
         let path = dest.join(".pre-commit-config.yaml");
@@ -789,7 +1043,13 @@ mod tests {
     fn refuses_to_overwrite_pre_commit_without_force() {
         let dir = tempfile::tempdir().unwrap();
         let dest = dir.path().join("demo");
-        generate("hello-world", &dest, &project_vars("demo", "A", "2021"), false).unwrap();
+        generate(
+            "hello-world",
+            &dest,
+            &project_vars("demo", "A", "2021"),
+            false,
+        )
+        .unwrap();
         write_pre_commit_config(&dest, false).unwrap();
         assert!(matches!(
             write_pre_commit_config(&dest, false),
@@ -802,7 +1062,13 @@ mod tests {
     fn pre_commit_not_written_without_flag() {
         let dir = tempfile::tempdir().unwrap();
         let dest = dir.path().join("demo");
-        generate("hello-world", &dest, &project_vars("demo", "A", "2021"), false).unwrap();
+        generate(
+            "hello-world",
+            &dest,
+            &project_vars("demo", "A", "2021"),
+            false,
+        )
+        .unwrap();
         assert!(!dest.join(".pre-commit-config.yaml").exists());
     }
 
@@ -850,7 +1116,12 @@ mod tests {
         let plugin = ScaffoldPlugin;
         let cmd = plugin.command();
         let matches = cmd
-            .try_get_matches_from(vec!["new", "my-project", "--from", "https://example.com/tpl"])
+            .try_get_matches_from(vec![
+                "new",
+                "my-project",
+                "--from",
+                "https://example.com/tpl",
+            ])
             .unwrap();
         assert_eq!(
             matches.get_one::<String>("from").map(String::as_str),
@@ -897,14 +1168,26 @@ mod tests {
         render_dir_fs(&source, &source, &dest, &vars).unwrap();
 
         // .hbs suffix must be stripped.
-        assert!(dest.join("Cargo.toml").exists(), "Cargo.toml.hbs -> Cargo.toml");
-        assert!(!dest.join("Cargo.toml.hbs").exists(), ".hbs file must not appear in dest");
+        assert!(
+            dest.join("Cargo.toml").exists(),
+            "Cargo.toml.hbs -> Cargo.toml"
+        );
+        assert!(
+            !dest.join("Cargo.toml.hbs").exists(),
+            ".hbs file must not appear in dest"
+        );
 
         let cargo = std::fs::read_to_string(dest.join("Cargo.toml")).unwrap();
-        assert!(cargo.contains("my-contract"), "variable substitution applied");
+        assert!(
+            cargo.contains("my-contract"),
+            "variable substitution applied"
+        );
 
         let readme = std::fs::read_to_string(dest.join("README.md")).unwrap();
-        assert!(readme.contains("# my-contract"), "substitution in plain file");
+        assert!(
+            readme.contains("# my-contract"),
+            "substitution in plain file"
+        );
     }
 
     /// generate_from_url refuses to overwrite an existing dest without --force.
@@ -928,7 +1211,11 @@ mod tests {
     #[test]
     fn generate_from_url_returns_descriptive_error_for_unreachable_url() {
         // Skip this test if git is not installed.
-        if std::process::Command::new("git").arg("--version").output().is_err() {
+        if std::process::Command::new("git")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
             return;
         }
 
@@ -961,9 +1248,8 @@ mod tests {
         // path override via the environment. This test is advisory only.
         // Instead, we verify the ToolMissing arm compiles and the error message
         // is correct by constructing it directly.
-        let err = ForgeError::ToolMissing(
-            "git — install git to use --from with remote templates".into(),
-        );
+        let err =
+            ForgeError::ToolMissing("git — install git to use --from with remote templates".into());
         assert!(err.to_string().contains("git"));
         assert!(err.to_string().contains("--from"));
     }

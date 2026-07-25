@@ -64,6 +64,7 @@ pub fn available_templates() -> Vec<&'static str> {
 /// the `templates` subcommand and any future JSON output layer.
 pub fn template_description(name: &str) -> Option<&'static str> {
     match name {
+        "amm" => Some("constant-product AMM / liquidity pool (x*y=k, 0.3% fee)"),
         "crowdfund" => Some("escrow/deadline crowdfunding contract"),
         "hello-world" => Some("minimal greeter contract (recommended starting point)"),
         "nft" => Some("NFT (non-fungible token) with per-token metadata and minting"),
@@ -585,7 +586,7 @@ mod tests {
     fn lists_all_bundled_templates() {
         assert_eq!(
             available_templates(),
-            vec!["crowdfund", "hello-world", "nft", "token"]
+            vec!["amm", "crowdfund", "hello-world", "nft", "token"]
         );
     }
 
@@ -614,7 +615,7 @@ mod tests {
     fn catalog_returns_all_templates_with_descriptions() {
         let catalog = template_catalog();
         let names: Vec<&str> = catalog.iter().map(|t| t.name).collect();
-        assert_eq!(names, vec!["crowdfund", "hello-world", "nft", "token"]);
+        assert_eq!(names, vec!["amm", "crowdfund", "hello-world", "nft", "token"]);
         for entry in &catalog {
             assert!(
                 !entry.description.is_empty(),

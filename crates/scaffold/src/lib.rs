@@ -66,6 +66,7 @@ pub fn template_description(name: &str) -> Option<&'static str> {
     match name {
         "crowdfund" => Some("escrow/deadline crowdfunding contract"),
         "hello-world" => Some("minimal greeter contract (recommended starting point)"),
+        "multisig" => Some("M-of-N multisig account contract (CustomAccountInterface)"),
         "nft" => Some("NFT (non-fungible token) with per-token metadata and minting"),
         "token" => Some("SEP-41 fungible token (soroban_sdk::token::TokenInterface)"),
         _ => None,
@@ -208,7 +209,10 @@ pub fn init_git(dest: &Path) -> Result<()> {
         .output();
     match output {
         Ok(o) if o.status.success() => Ok(()),
-        Ok(o) => Err(ForgeError::Other(format!("`git init` exited with status {}", o.status))),
+        Ok(o) => Err(ForgeError::Other(format!(
+            "`git init` exited with status {}",
+            o.status
+        ))),
         Err(e) => Err(ForgeError::io("executing `git init`")(e)),
     }
 }
@@ -363,7 +367,12 @@ impl ForgePlugin for ScaffoldPlugin {
             "scaffolding `{name}` from template `{template}` into {}",
             dest.display()
         );
-        generate(&template, &dest, &project_vars(name, &author, &edition), force)?;
+        generate(
+            &template,
+            &dest,
+            &project_vars(name, &author, &edition),
+            force,
+        )?;
 
         if !matches.get_flag("no-git") {
             if let Err(err) = init_git(&dest) {
@@ -403,14 +412,17 @@ mod tests {
     fn lists_all_bundled_templates() {
         assert_eq!(
             available_templates(),
-            vec!["crowdfund", "hello-world", "nft", "token"]
+            vec!["crowdfund", "hello-world", "multisig", "nft", "token"]
         );
     }
 
     #[test]
     fn template_list_report_has_heading_and_items() {
         let report = format_template_list(&["hello-world", "nft", "token"]);
-        assert_eq!(report, "available templates:\n  hello-world\n  nft\n  token\n");
+        assert_eq!(
+            report,
+            "available templates:\n  hello-world\n  nft\n  token\n"
+        );
     }
 
     #[test]
@@ -432,7 +444,10 @@ mod tests {
     fn catalog_returns_all_templates_with_descriptions() {
         let catalog = template_catalog();
         let names: Vec<&str> = catalog.iter().map(|t| t.name).collect();
-        assert_eq!(names, vec!["crowdfund", "hello-world", "nft", "token"]);
+        assert_eq!(
+            names,
+            vec!["crowdfund", "hello-world", "multisig", "nft", "token"]
+        );
         for entry in &catalog {
             assert!(
                 !entry.description.is_empty(),
@@ -496,7 +511,12 @@ mod tests {
         let dest = dir.path().join("demo");
         std::fs::create_dir(&dest).unwrap();
         assert!(matches!(
-            generate("hello-world", &dest, &project_vars("demo", "A", "2021"), false),
+            generate(
+                "hello-world",
+                &dest,
+                &project_vars("demo", "A", "2021"),
+                false
+            ),
             Err(ForgeError::AlreadyExists(_))
         ));
     }
@@ -564,15 +584,39 @@ mod tests {
         for template in available_templates() {
             let dir = tempfile::tempdir().unwrap();
             let dest = dir.path().join("my-contract");
-            generate(template, &dest, &project_vars("my-contract", "A", "2021"), false).unwrap();
+            generate(
+                template,
+                &dest,
+                &project_vars("my-contract", "A", "2021"),
+                false,
+            )
+            .unwrap();
             let readme_path = dest.join("README.md");
-            assert!(readme_path.is_file(), "README.md missing for template {template}");
+            assert!(
+                readme_path.is_file(),
+                "README.md missing for template {template}"
+            );
             let contents = std::fs::read_to_string(&readme_path).unwrap();
-            assert!(contents.contains("# my-contract"), "template {template} title substitution");
-            assert!(contents.contains("cargo test"), "template {template} test step");
-            assert!(contents.contains("stellar contract build"), "template {template} build step");
-            assert!(contents.contains("stellar contract deploy"), "template {template} deploy step");
-            assert!(contents.contains("my_contract.wasm"), "template {template} crate name substitution");
+            assert!(
+                contents.contains("# my-contract"),
+                "template {template} title substitution"
+            );
+            assert!(
+                contents.contains("cargo test"),
+                "template {template} test step"
+            );
+            assert!(
+                contents.contains("stellar contract build"),
+                "template {template} build step"
+            );
+            assert!(
+                contents.contains("stellar contract deploy"),
+                "template {template} deploy step"
+            );
+            assert!(
+                contents.contains("my_contract.wasm"),
+                "template {template} crate name substitution"
+            );
         }
     }
 
@@ -589,7 +633,13 @@ mod tests {
     fn writes_pre_commit_config() {
         let dir = tempfile::tempdir().unwrap();
         let dest = dir.path().join("demo");
-        generate("hello-world", &dest, &project_vars("demo", "A", "2021"), false).unwrap();
+        generate(
+            "hello-world",
+            &dest,
+            &project_vars("demo", "A", "2021"),
+            false,
+        )
+        .unwrap();
         write_pre_commit_config(&dest, false).unwrap();
 
         let path = dest.join(".pre-commit-config.yaml");
@@ -606,7 +656,13 @@ mod tests {
     fn refuses_to_overwrite_pre_commit_without_force() {
         let dir = tempfile::tempdir().unwrap();
         let dest = dir.path().join("demo");
-        generate("hello-world", &dest, &project_vars("demo", "A", "2021"), false).unwrap();
+        generate(
+            "hello-world",
+            &dest,
+            &project_vars("demo", "A", "2021"),
+            false,
+        )
+        .unwrap();
         write_pre_commit_config(&dest, false).unwrap();
         assert!(matches!(
             write_pre_commit_config(&dest, false),
@@ -619,7 +675,13 @@ mod tests {
     fn pre_commit_not_written_without_flag() {
         let dir = tempfile::tempdir().unwrap();
         let dest = dir.path().join("demo");
-        generate("hello-world", &dest, &project_vars("demo", "A", "2021"), false).unwrap();
+        generate(
+            "hello-world",
+            &dest,
+            &project_vars("demo", "A", "2021"),
+            false,
+        )
+        .unwrap();
         assert!(!dest.join(".pre-commit-config.yaml").exists());
     }
 

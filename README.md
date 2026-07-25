@@ -72,6 +72,9 @@ with its own README, tests and a small public surface; they meet only at the
 | 5 — Docs & DX | [`crates/doctor`](crates/doctor) + [`docs/`](docs) + [`examples/`](examples) | `doctor` |
 | 6 — TypeScript bindings | [`crates/bindings-ts`](crates/bindings-ts) | `bindings ts` |
 
+> **Note:** See [`examples/README.md`](examples/README.md) for instructions on
+> regenerating the checked-in example projects.
+
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the ownership map and how to pick
 up an issue — [ISSUES.md](ISSUES.md) lists well-scoped starter work.

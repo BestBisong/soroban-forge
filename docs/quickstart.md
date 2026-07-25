@@ -1,8 +1,20 @@
 # Quickstart — 5 Minutes to Your First Soroban Contract
 
 ## Prerequisites
-- Rust + `wasm32-unknown-unknown` target
-- `stellar-cli` ≥ 21.0
+
+Before you begin, make sure the following are installed:
+
+- **Rust toolchain** — [Install via rustup](https://rustup.rs/)
+- **`wasm32-unknown-unknown` target** — `rustup target add wasm32-unknown-unknown`
+- **Stellar CLI** (≥ 21.0) — [Install guide](https://soroban.stellar.org/docs/getting-started/setup)
+
+You can verify your environment is ready by running:
+
+```sh
+soroban-forge doctor
+```
+
+This checks that all required tools are installed and correctly configured.
 
 ## Steps
 

@@ -8,10 +8,13 @@
 //!   assertion helper.
 //! - `tests/forge_smoke.rs` — smoke tests that register the detected
 //!   `#[contract]` types and construct their clients.
+//! - `tests/forge_invariant.rs` — property-based invariant tests (proptest).
+//! - `fuzz/` — a cargo-fuzz target (only with `--fuzz`) that feeds arbitrary
+//!   values into the detected contract methods.
 //!
-//! The generator inspects `src/lib.rs` to find the contract type. When the
-//! contract declares a `__constructor`, the smoke test is emitted `#[ignore]`d
-//! with a TODO, because constructor arguments cannot be guessed.
+//! The generator inspects `src/lib.rs` to find the contract type(s). When a
+//! contract declares a `__constructor`, sensible default arguments are
+//! generated for its registration in the smoke test.
 
 pub mod detect;
 
@@ -174,6 +177,35 @@ proptest! {
 }
 "#;
 
+/// cargo-fuzz workspace manifest, emitted at `fuzz/Cargo.toml` with `--fuzz`.
+pub const FUZZ_CARGO_TOML: &str = r#"[package]
+name = "{{crate_name}}-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+arbitrary = { version = "1", features = ["derive"] }
+soroban-sdk = { version = "*", features = ["testutils"] }
+{{crate_name}} = { path = ".." }
+
+[[bin]]
+name = "fuzz_target_1"
+path = "fuzz_targets/fuzz_target_1.rs"
+test = false
+doc = false
+bench = false
+
+# Keep this crate out of the contract's package graph: cargo-fuzz builds `fuzz`
+# as its own workspace, otherwise a standalone parent package errors with
+# "current package believes it's in a workspace when it's not".
+[workspace]
+"#;
+
 /// Convert `CamelCase` struct names to `snake_case` test function names.
 pub fn to_snake_case(s: &str) -> String {
     let mut out = String::new();
@@ -244,19 +276,143 @@ pub fn build_invariant_test(info: &ContractInfo) -> String {
     out
 }
 
+/// Render the `fuzz/fuzz_targets/fuzz_target_1.rs` content.
+///
+/// The fuzz target exercises the first detected `#[contract]` type: it derives
+/// an `Arbitrary` `FuzzInput` enum over the contract's methods and, when the
+/// contract has a `__constructor`, a `FuzzConstructorArgs` struct for its
+/// arguments.
+pub fn generate_fuzz_target(info: &ContractInfo) -> String {
+    let contract_type = info
+        .contract_types
+        .first()
+        .map(String::as_str)
+        .unwrap_or("Contract");
+
+    let mut out = String::new();
+    out.push_str("#![no_main]\n");
+    out.push_str("use libfuzzer_sys::fuzz_target;\n");
+    out.push_str("use arbitrary::Arbitrary;\n");
+    out.push_str("use soroban_sdk::testutils::arbitrary::SorobanArbitrary;\n");
+    out.push_str("use soroban_sdk::{Env, Address, String, MuxedAddress, IntoVal, TryFromVal};\n");
+    out.push_str(&format!(
+        "use {}::{{{}, {}Client}};\n\n",
+        info.crate_name, contract_type, contract_type
+    ));
+
+    if let Some(constructor_args) = &info.constructor_arg_types {
+        out.push_str("#[derive(Arbitrary, Debug)]\n");
+        out.push_str("pub struct FuzzConstructorArgs {\n");
+        for (arg, ty) in constructor_args {
+            out.push_str(&format!(
+                "    {}: <{} as SorobanArbitrary>::Prototype,\n",
+                arg, ty
+            ));
+        }
+        out.push_str("}\n\n");
+    }
+
+    out.push_str("#[derive(Arbitrary, Debug)]\n");
+    out.push_str("pub enum FuzzInput {\n");
+    for m in &info.methods {
+        out.push_str(&format!("    {}{{\n", m.name));
+        for (arg, ty) in &m.args {
+            out.push_str(&format!(
+                "        {}: <{} as SorobanArbitrary>::Prototype,\n",
+                arg, ty
+            ));
+        }
+        out.push_str("    },\n");
+    }
+    out.push_str("}\n\n");
+
+    if info.constructor_arg_types.is_some() {
+        out.push_str("fuzz_target!(|input: (FuzzConstructorArgs, FuzzInput)| {\n");
+        out.push_str("    let (constr, method_input) = input;\n");
+    } else {
+        out.push_str("fuzz_target!(|method_input: FuzzInput| {\n");
+    }
+
+    out.push_str("    let env = Env::default();\n");
+    out.push_str("    env.mock_all_auths();\n");
+
+    if let Some(constructor_args) = &info.constructor_arg_types {
+        for (arg, ty) in constructor_args {
+            out.push_str(&format!(
+                "    let Ok(constr_{}) = {}::try_from_val(&env, &constr.{}) else {{ return; }};\n",
+                arg, ty, arg
+            ));
+        }
+        let constr_call_args = constructor_args
+            .iter()
+            .map(|(n, _)| format!("constr_{}", n))
+            .collect::<Vec<_>>()
+            .join(", ");
+        out.push_str(&format!(
+            "    let contract_id = env.register({}, ({}));\n",
+            contract_type, constr_call_args
+        ));
+        out.push_str(&format!(
+            "    let client = {}Client::new(&env, &contract_id);\n",
+            contract_type
+        ));
+    } else {
+        out.push_str(&format!(
+            "    let contract_id = env.register({}, ());\n",
+            contract_type
+        ));
+        out.push_str(&format!(
+            "    let client = {}Client::new(&env, &contract_id);\n",
+            contract_type
+        ));
+    }
+
+    out.push_str("\n    match method_input {\n");
+    for m in &info.methods {
+        out.push_str(&format!("        FuzzInput::{} {{ ", m.name));
+        let args_list: Vec<String> = m.args.iter().map(|(n, _)| n.clone()).collect();
+        out.push_str(&args_list.join(", "));
+        out.push_str(" } => {\n");
+        for (arg, ty) in &m.args {
+            out.push_str(&format!(
+                "            let Ok(arg_{}) = {}::try_from_val(&env, &{}) else {{ return; }};\n",
+                arg, ty, arg
+            ));
+        }
+        out.push_str(&format!("            let _ = client.{}(", m.name));
+        let call_args: Vec<String> = m.args.iter().map(|(n, _)| format!("&arg_{}", n)).collect();
+        out.push_str(&call_args.join(", "));
+        out.push_str(");\n        },\n");
+    }
+    out.push_str("    }\n");
+    out.push_str("});\n");
+    out
+}
+
 /// Generate the harness into `dir`. Public API behind `test-init`.
-/// Returns the list of files written (relative to `dir`).
-pub fn generate(dir: &Path, force: bool) -> Result<(ContractInfo, Vec<&'static str>)> {
+/// Returns the list of files written (relative to `dir`). With `fuzz`, also
+/// emits a cargo-fuzz target under `fuzz/`.
+pub fn generate(dir: &Path, force: bool, fuzz: bool) -> Result<(ContractInfo, Vec<&'static str>)> {
     let info = detect::inspect(dir)?;
 
     let smoke = build_smoke_test(&info);
     let invariant = build_invariant_test(&info);
 
-    let files: [(&'static str, String); 3] = [
+    let mut files: Vec<(&'static str, String)> = vec![
         ("tests/common/mod.rs", FIXTURES_RS.to_string()),
         ("tests/forge_smoke.rs", smoke),
         ("tests/forge_invariant.rs", invariant),
     ];
+
+    if fuzz {
+        let mut vars = Vars::new();
+        vars.insert("crate_name".into(), info.crate_name.clone());
+        files.push(("fuzz/Cargo.toml", render_str(FUZZ_CARGO_TOML, &vars)));
+        files.push((
+            "fuzz/fuzz_targets/fuzz_target_1.rs",
+            generate_fuzz_target(&info),
+        ));
+    }
 
     let mut written = Vec::new();
     for (rel, contents) in files {
@@ -276,7 +432,7 @@ pub fn generate(dir: &Path, force: bool) -> Result<(ContractInfo, Vec<&'static s
 }
 
 /// Render the report for a generated test harness.
-pub fn format_report(info: &ContractInfo, written: &[&str]) -> String {
+pub fn format_report(info: &ContractInfo, written: &[&str], fuzz: bool) -> String {
     let contract_list = info.contract_types.join(", ");
     let s = if info.contract_types.len() == 1 {
         ""
@@ -299,10 +455,10 @@ pub fn format_report(info: &ContractInfo, written: &[&str]) -> String {
         out.push_str("  soroban-sdk = { version = \"*\", features = [\"testutils\"] }\n");
     }
     if !info.has_proptest {
+        out.push_str("\nwarning: dev-dependencies do not include `proptest`.\n");
         out.push_str(
-            "\nwarning: dev-dependencies do not include `proptest`.\n",
+            "add this to Cargo.toml or the generated invariant tests will not compile:\n\n",
         );
-        out.push_str("add this to Cargo.toml or the generated invariant tests will not compile:\n\n");
         out.push_str("  [dev-dependencies]\n");
         out.push_str("  proptest = \"1.6\"\n");
     }
@@ -312,7 +468,11 @@ pub fn format_report(info: &ContractInfo, written: &[&str]) -> String {
             info.contract_types.join(", ")
         ));
     }
-    out.push_str("\nrun them with: cargo test\n");
+    if fuzz {
+        out.push_str("\nrun the fuzzer with: cargo +nightly fuzz run fuzz_target_1\n");
+    } else {
+        out.push_str("\nrun them with: cargo test\n");
+    }
     out
 }
 
@@ -346,6 +506,12 @@ impl ForgePlugin for TestgenPlugin {
                     .action(ArgAction::SetTrue)
                     .help("Generate a proptest-based invariant testing harness"),
             )
+            .arg(
+                Arg::new("fuzz")
+                    .long("fuzz")
+                    .action(ArgAction::SetTrue)
+                    .help("Emit a cargo-fuzz target that feeds arbitrary values into the contract methods"),
+            )
     }
 
     fn run(&self, matches: &ArgMatches, ctx: &ForgeContext) -> Result<()> {
@@ -354,7 +520,8 @@ impl ForgePlugin for TestgenPlugin {
             .map(|p| ctx.cwd.join(p))
             .unwrap_or_else(|| ctx.cwd.clone());
 
-        let (info, written) = generate(&dir, matches.get_flag("force"))?;
+        let fuzz = matches.get_flag("fuzz");
+        let (info, written) = generate(&dir, matches.get_flag("force"), fuzz)?;
 
         if ctx.json {
             let report = serde_json::json!({
@@ -368,7 +535,7 @@ impl ForgePlugin for TestgenPlugin {
             });
             println!("{}", serde_json::to_string_pretty(&report).unwrap());
         } else if !ctx.quiet {
-            print!("{}", format_report(&info, &written));
+            print!("{}", format_report(&info, &written, fuzz));
         }
         Ok(())
     }
@@ -383,7 +550,7 @@ mod tests {
         scaffold::generate(
             "hello-world",
             dir,
-            &scaffold::project_vars("demo", "Test <t@example.com>"),
+            &scaffold::project_vars("demo", "Test <t@example.com>", "2021"),
             false,
         )
         .unwrap();
@@ -398,6 +565,8 @@ mod tests {
             has_testutils,
             constructor_args: "()".to_string(),
             has_proptest: true,
+            methods: vec![],
+            constructor_arg_types: None,
         }
     }
 
@@ -410,19 +579,21 @@ mod tests {
             has_testutils,
             constructor_args: "()".to_string(),
             has_proptest: true,
+            methods: vec![],
+            constructor_arg_types: None,
         }
     }
 
     #[test]
     fn report_lists_generated_files() {
-        let report = format_report(&contract_info(false, true), &["tests/a.rs", "tests/b.rs"]);
+        let report = format_report(&contract_info(false, true), &["tests/a.rs", "tests/b.rs"], false);
         assert!(report.contains("contract `DemoContract` (crate `demo`)"));
         assert!(report.contains("  tests/a.rs\n  tests/b.rs\n"));
     }
 
     #[test]
     fn report_explains_missing_testutils() {
-        let report = format_report(&contract_info(false, false), &[]);
+        let report = format_report(&contract_info(false, false), &[], false);
         assert!(report.contains("warning: dev-dependencies"));
         assert!(report.contains("features = [\"testutils\"]"));
     }
@@ -431,15 +602,21 @@ mod tests {
     fn report_explains_missing_proptest() {
         let mut info = contract_info(false, true);
         info.has_proptest = false;
-        let report = format_report(&info, &[]);
+        let report = format_report(&info, &[], false);
         assert!(report.contains("warning: dev-dependencies do not include `proptest`"));
     }
 
     #[test]
     fn report_explains_constructor_follow_up() {
-        let report = format_report(&contract_info(true, true), &[]);
+        let report = format_report(&contract_info(true, true), &[], false);
         assert!(report.contains("DemoContract` has a __constructor"));
         assert!(report.contains("real arguments were generated"));
+    }
+
+    #[test]
+    fn report_points_to_fuzzer_when_fuzzing() {
+        let report = format_report(&contract_info(false, true), &["fuzz/fuzz_targets/fuzz_target_1.rs"], true);
+        assert!(report.contains("cargo +nightly fuzz run fuzz_target_1"));
     }
 
     #[test]
@@ -448,7 +625,7 @@ mod tests {
         let dir = tmp.path().join("demo");
         hello_world_project(&dir);
 
-        let (info, written) = generate(&dir, false).unwrap();
+        let (info, written) = generate(&dir, false, false).unwrap();
         assert_eq!(info.contract_types, vec!["HelloContract"]);
         assert!(!info.has_constructor);
         assert!(info.has_testutils);
@@ -474,12 +651,41 @@ mod tests {
     }
 
     #[test]
+    fn generates_fuzz_target_for_hello_world() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("demo");
+        hello_world_project(&dir);
+
+        let (_info, written) = generate(&dir, false, true).unwrap();
+        assert!(written.contains(&"tests/common/mod.rs"));
+        assert!(written.contains(&"tests/forge_smoke.rs"));
+        assert!(written.contains(&"tests/forge_invariant.rs"));
+        assert!(written.contains(&"fuzz/Cargo.toml"));
+        assert!(written.contains(&"fuzz/fuzz_targets/fuzz_target_1.rs"));
+
+        let fuzz_toml = std::fs::read_to_string(dir.join("fuzz/Cargo.toml")).unwrap();
+        assert!(fuzz_toml.contains("name = \"demo-fuzz\""));
+        assert!(fuzz_toml.contains("demo = { path = \"..\" }"));
+        // cargo-fuzz needs an explicit [[bin]] to locate the target, and a
+        // [workspace] table so a standalone parent package doesn't reject it.
+        assert!(fuzz_toml.contains("[[bin]]"));
+        assert!(fuzz_toml.contains("name = \"fuzz_target_1\""));
+        assert!(fuzz_toml.contains("path = \"fuzz_targets/fuzz_target_1.rs\""));
+        assert!(fuzz_toml.contains("[workspace]"));
+
+        let fuzz_rs =
+            std::fs::read_to_string(dir.join("fuzz/fuzz_targets/fuzz_target_1.rs")).unwrap();
+        assert!(fuzz_rs.contains("use demo::{HelloContract, HelloContractClient};"));
+        assert!(fuzz_rs.contains("fuzz_target!(|method_input: FuzzInput| {"));
+    }
+
+    #[test]
     fn constructor_contract_gets_sensible_default_arguments() {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path().join("tok");
-        scaffold::generate("token", &dir, &scaffold::project_vars("tok", "T"), false).unwrap();
+        scaffold::generate("token", &dir, &scaffold::project_vars("tok", "T", "2021"), false).unwrap();
 
-        let (info, _) = generate(&dir, false).unwrap();
+        let (info, _) = generate(&dir, false, false).unwrap();
         assert!(info.has_constructor);
         let smoke = std::fs::read_to_string(dir.join("tests/forge_smoke.rs")).unwrap();
         assert!(!smoke.contains("#[ignore]"));
@@ -493,18 +699,18 @@ mod tests {
         let dir = tmp.path().join("demo");
         hello_world_project(&dir);
 
-        generate(&dir, false).unwrap();
+        generate(&dir, false, false).unwrap();
         assert!(matches!(
-            generate(&dir, false),
+            generate(&dir, false, false),
             Err(ForgeError::AlreadyExists(_))
         ));
-        generate(&dir, true).unwrap();
+        generate(&dir, true, false).unwrap();
     }
 
     #[test]
     fn errors_outside_a_cargo_project() {
         let tmp = tempfile::tempdir().unwrap();
-        assert!(generate(tmp.path(), false).is_err());
+        assert!(generate(tmp.path(), false, false).is_err());
     }
 
     // ── multi-contract tests ──
@@ -561,14 +767,45 @@ mod tests {
     }
 
     #[test]
+    fn fuzz_target_covers_first_contract_and_its_methods() {
+        let mut info = multi_contract_info(false, true);
+        info.methods = vec![detect::MethodInfo {
+            name: "mint".into(),
+            args: vec![("amount".into(), "i128".into())],
+        }];
+        let fuzz = generate_fuzz_target(&info);
+
+        // First contract only.
+        assert!(fuzz.contains("use demo::{Foo, FooClient};"));
+        assert!(!fuzz.contains("Bar"));
+        // Method surfaced into the FuzzInput enum and dispatch.
+        assert!(fuzz.contains("pub enum FuzzInput"));
+        assert!(fuzz.contains("mint{"));
+        assert!(fuzz.contains("client.mint("));
+        // No constructor prototype when there are no constructor args.
+        assert!(!fuzz.contains("FuzzConstructorArgs"));
+    }
+
+    #[test]
+    fn fuzz_target_emits_constructor_prototype() {
+        let mut info = contract_info(true, true);
+        info.constructor_arg_types = Some(vec![("admin".into(), "Address".into())]);
+        let fuzz = generate_fuzz_target(&info);
+
+        assert!(fuzz.contains("pub struct FuzzConstructorArgs"));
+        assert!(fuzz.contains("admin: <Address as SorobanArbitrary>::Prototype"));
+        assert!(fuzz.contains("fuzz_target!(|input: (FuzzConstructorArgs, FuzzInput)|"));
+    }
+
+    #[test]
     fn report_uses_plural_for_multiple_contracts() {
-        let report = format_report(&multi_contract_info(false, true), &["tests/a.rs"]);
+        let report = format_report(&multi_contract_info(false, true), &["tests/a.rs"], false);
         assert!(report.contains("generated test harness for contracts `Foo, Bar` (crate `demo`)"));
     }
 
     #[test]
     fn report_uses_singular_for_single_contract() {
-        let report = format_report(&contract_info(false, true), &["tests/a.rs"]);
+        let report = format_report(&contract_info(false, true), &["tests/a.rs"], false);
         assert!(report.contains("generated test harness for contract `DemoContract` (crate `demo`)"));
     }
 
@@ -602,7 +839,7 @@ soroban-sdk = { version = "1", features = ["testutils"] }
         )
         .unwrap();
 
-        let (info, written) = generate(&dir, false).unwrap();
+        let (info, written) = generate(&dir, false, false).unwrap();
         assert_eq!(info.contract_types, vec!["FirstContract", "SecondContract"]);
         assert_eq!(
             written,

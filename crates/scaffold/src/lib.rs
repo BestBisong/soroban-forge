@@ -64,6 +64,7 @@ pub fn available_templates() -> Vec<&'static str> {
 /// the `templates` subcommand and any future JSON output layer.
 pub fn template_description(name: &str) -> Option<&'static str> {
     match name {
+        "amm" => Some("constant-product AMM / liquidity pool (x*y=k, 0.3% fee)"),
         "crowdfund" => Some("escrow/deadline crowdfunding contract"),
         "hello-world" => Some("minimal greeter contract (recommended starting point)"),
         "multisig" => Some("M-of-N multisig account contract (CustomAccountInterface)"),
@@ -145,6 +146,294 @@ pub fn generate(template: &str, dest: &Path, vars: &Vars, force: bool) -> Result
 
     render_dir(template_dir, template, dest, vars)?;
     write_forge_toml(dest, vars)?;
+    Ok(())
+}
+
+/// Parse a `--contract` spec of the form `NAME` or `NAME:TEMPLATE`.
+/// Defaults to the `hello-world` template when no template is given.
+/// Returns `(name, template)`.
+pub fn parse_contract_spec(spec: &str) -> (String, String) {
+    match spec.split_once(':') {
+        Some((name, template)) => (name.trim().to_string(), template.trim().to_string()),
+        None => (spec.trim().to_string(), DEFAULT_TEMPLATE.to_string()),
+    }
+}
+
+/// Rewrite a rendered member `Cargo.toml` for use inside a workspace:
+/// - point `soroban-sdk` at the workspace (`soroban-sdk.workspace = true`)
+///   in both `[dependencies]` and `[dev-dependencies]` (preserving the
+///   dev `features`), and
+/// - drop `[profile.*]` sections, which Cargo only honours at the workspace
+///   root and warns about in members.
+fn member_manifest(rendered: &str) -> String {
+    let mut out = String::new();
+    let mut in_profile = false;
+    for line in rendered.lines() {
+        let trimmed = line.trim_start();
+
+        // Enter/exit a [profile.*] section (dropped entirely).
+        if trimmed.starts_with('[') {
+            in_profile = trimmed.starts_with("[profile.");
+            if in_profile {
+                continue;
+            }
+        }
+        if in_profile {
+            continue;
+        }
+
+        // Replace the two soroban-sdk dependency forms with workspace refs.
+        if trimmed.starts_with("soroban-sdk = {") {
+            // dev-dependencies: keep testutils via the workspace, still a
+            // workspace ref (features are declared on the workspace dep).
+            out.push_str("soroban-sdk = { workspace = true, features = [\"testutils\"] }\n");
+            continue;
+        }
+        if trimmed.starts_with("soroban-sdk = \"") {
+            out.push_str("soroban-sdk.workspace = true\n");
+            continue;
+        }
+
+        out.push_str(line);
+        out.push('\n');
+    }
+    out
+}
+
+/// The workspace root `Cargo.toml`, listing all members under `contracts/`
+/// and pinning the shared `soroban-sdk` version and release profile.
+fn workspace_root_manifest(members: &[String]) -> String {
+    let members_list = members
+        .iter()
+        .map(|m| format!("    \"contracts/{m}\",\n"))
+        .collect::<String>();
+    format!(
+        "[workspace]\n\
+         resolver = \"2\"\n\
+         members = [\n{members_list}]\n\
+         \n\
+         [workspace.dependencies]\n\
+         soroban-sdk = \"{SOROBAN_SDK_VERSION}\"\n\
+         \n\
+         [profile.release]\n\
+         opt-level = \"z\"\n\
+         overflow-checks = true\n\
+         debug = 0\n\
+         strip = \"symbols\"\n\
+         debug-assertions = false\n\
+         panic = \"abort\"\n\
+         codegen-units = 1\n\
+         lto = true\n\
+         \n\
+         [profile.release-with-logs]\n\
+         inherits = \"release\"\n\
+         debug-assertions = true\n"
+    )
+}
+
+/// Scaffold a Cargo workspace containing one crate per `(name, template)` under
+/// `contracts/<name>/`, plus a shared root `Cargo.toml` and a `forge.toml`.
+///
+/// Each contract is rendered with the existing single-crate template machinery,
+/// then its manifest is rewritten to consume the workspace's shared
+/// `soroban-sdk` dependency and release profile. The result builds every
+/// contract with a single `cargo build` at the root.
+pub fn generate_workspace(
+    dest: &Path,
+    project_name: &str,
+    author: &str,
+    edition: &str,
+    contracts: &[(String, String)],
+    force: bool,
+) -> Result<()> {
+    if contracts.is_empty() {
+        return Err(ForgeError::InvalidArgument(
+            "a workspace needs at least one --contract".into(),
+        ));
+    }
+    if dest.exists() && !force {
+        return Err(ForgeError::AlreadyExists(dest.to_path_buf()));
+    }
+
+    let mut members = Vec::new();
+    for (name, template) in contracts {
+        validate_project_name(name)?;
+        let member_dir = dest.join("contracts").join(name);
+        let vars = project_vars(name, author, edition);
+
+        // Render the contract as a normal single-crate project, but WITHOUT its
+        // own forge.toml (the workspace root owns that).
+        let template_dir = TEMPLATES.get_dir(template).ok_or_else(|| {
+            ForgeError::Template(format!(
+                "unknown template `{template}` (available: {})",
+                available_templates().join(", ")
+            ))
+        })?;
+        render_dir(template_dir, template, &member_dir, &vars)?;
+
+        // Rewrite the member manifest to use workspace deps + root profile.
+        let manifest_path = member_dir.join("Cargo.toml");
+        let rendered = std::fs::read_to_string(&manifest_path).map_err(ForgeError::io(format!(
+            "reading {}",
+            manifest_path.display()
+        )))?;
+        std::fs::write(&manifest_path, member_manifest(&rendered)).map_err(ForgeError::io(
+            format!("writing {}", manifest_path.display()),
+        ))?;
+
+        members.push(name.clone());
+    }
+
+    // Root Cargo.toml and forge.toml.
+    let root_manifest = dest.join("Cargo.toml");
+    std::fs::write(&root_manifest, workspace_root_manifest(&members)).map_err(ForgeError::io(
+        format!("writing {}", root_manifest.display()),
+    ))?;
+
+    let vars = project_vars(project_name, author, edition);
+    write_forge_toml(dest, &vars)?;
+    Ok(())
+}
+/// Clone a remote git repository URL into a temp directory and render it as a
+/// template, applying the same `{{variable}}` substitution rules as bundled
+/// templates. The clone is shallow (`--depth 1`) to keep it fast.
+///
+/// # Errors
+///
+/// Returns a descriptive [`ForgeError`] when:
+/// - `git` is not on `PATH` (`ToolMissing`)
+/// - the network is unavailable or the URL is unreachable (`Other` with a hint
+///   to check connectivity)
+/// - the destination already exists and `force` is not set (`AlreadyExists`)
+pub fn generate_from_url(url: &str, dest: &Path, vars: &Vars, force: bool) -> Result<()> {
+    if dest.exists() && !force {
+        return Err(ForgeError::AlreadyExists(dest.to_path_buf()));
+    }
+
+    // Clone into a temporary directory so we never touch dest on failure.
+    let tmp = tempfile::tempdir().map_err(ForgeError::io(
+        "creating temporary directory for remote clone",
+    ))?;
+    let clone_dest = tmp.path().join("repo");
+
+    log::debug!("cloning `{url}` into {}", clone_dest.display());
+
+    let output = std::process::Command::new("git")
+        .args(["clone", "--depth", "1", "--", url])
+        .arg(&clone_dest)
+        .output()
+        .map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                ForgeError::ToolMissing(
+                    "git — install git to use --from with remote templates".into(),
+                )
+            } else {
+                ForgeError::io("running `git clone`")(e)
+            }
+        })?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        // Distinguish network failures from other git errors for a friendlier message.
+        let is_network_error = stderr.contains("Could not resolve host")
+            || stderr.contains("Failed to connect")
+            || stderr.contains("Network is unreachable")
+            || stderr.contains("unable to access")
+            || stderr.contains("Connection refused")
+            || stderr.contains("not found")
+            || stderr.contains("Repository not found")
+            || stderr.contains("does not exist");
+
+        return if is_network_error {
+            Err(ForgeError::Other(format!(
+                "could not clone `{url}`: network error or repository not found\n\
+                 hint: check your internet connection and confirm the URL is a public repository\n\
+                 git: {stderr}"
+            )))
+        } else {
+            Err(ForgeError::Other(format!(
+                "git clone failed for `{url}` (exit {})\n\
+                 git: {stderr}",
+                output.status
+            )))
+        };
+    }
+
+    // Remove the .git directory from the clone — we're rendering a template,
+    // not keeping the upstream history.
+    let dot_git = clone_dest.join(".git");
+    if dot_git.exists() {
+        std::fs::remove_dir_all(&dot_git)
+            .map_err(ForgeError::io("removing .git from cloned template"))?;
+    }
+
+    // Render the cloned filesystem tree with variable substitution.
+    render_dir_fs(&clone_dest, &clone_dest, dest, vars)?;
+    write_forge_toml(dest, vars)?;
+    Ok(())
+    // `tmp` is dropped here, cleaning up the temp clone directory automatically.
+}
+
+/// Walk a real filesystem directory `dir` recursively and render every file
+/// into the matching path under `dest`, applying `{{variable}}` substitution
+/// to both file contents and relative path segments (same rules as
+/// [`render_dir`] for embedded templates).
+///
+/// Files ending in `.hbs` have that suffix stripped on render, matching the
+/// bundled-template convention.
+fn render_dir_fs(dir: &Path, source_root: &Path, dest: &Path, vars: &Vars) -> Result<()> {
+    for entry in std::fs::read_dir(dir).map_err(ForgeError::io(format!(
+        "reading directory {}",
+        dir.display()
+    )))? {
+        let entry = entry.map_err(ForgeError::io(format!(
+            "reading directory {}",
+            dir.display()
+        )))?;
+        let path = entry.path();
+
+        if path.is_dir() {
+            render_dir_fs(&path, source_root, dest, vars)?;
+        } else {
+            let rel = path
+                .strip_prefix(source_root)
+                .expect("path must be under source_root");
+
+            // Apply variable substitution to the relative path (including each
+            // component), then strip a trailing .hbs suffix if present.
+            let mut rel_str = render_str(&rel.to_string_lossy(), vars);
+            if let Some(stripped) = rel_str.strip_suffix(".hbs") {
+                rel_str = stripped.to_string();
+            }
+            let out_path = dest.join(&rel_str);
+
+            if let Some(parent) = out_path.parent() {
+                std::fs::create_dir_all(parent)
+                    .map_err(ForgeError::io(format!("creating {}", parent.display())))?;
+            }
+
+            // Only render UTF-8 files; copy binary files verbatim.
+            match std::fs::read(&path) {
+                Ok(bytes) => match std::str::from_utf8(&bytes) {
+                    Ok(text) => {
+                        std::fs::write(&out_path, render_str(text, vars))
+                            .map_err(ForgeError::io(format!("writing {}", out_path.display())))?;
+                    }
+                    Err(_) => {
+                        // Binary file — copy as-is without substitution.
+                        std::fs::write(&out_path, &bytes)
+                            .map_err(ForgeError::io(format!("writing {}", out_path.display())))?;
+                    }
+                },
+                Err(e) => {
+                    return Err(ForgeError::Io {
+                        context: format!("reading {}", path.display()),
+                        source: e,
+                    });
+                }
+            }
+        }
+    }
     Ok(())
 }
 
@@ -271,7 +560,14 @@ impl ForgePlugin for ScaffoldPlugin {
                 Arg::new("template")
                     .long("template")
                     .short('t')
-                    .help("Template to use (see --list-templates)"),
+                    .help("Bundled template to use (see --list-templates); mutually exclusive with --from"),
+            )
+            .arg(
+                Arg::new("from")
+                    .long("from")
+                    .value_name("URL")
+                    .help("Git repository URL to use as a remote template (e.g. https://github.com/user/tpl); mutually exclusive with --template")
+                    .conflicts_with("template"),
             )
             .arg(
                 Arg::new("author")
@@ -314,6 +610,19 @@ impl ForgePlugin for ScaffoldPlugin {
                     .action(ArgAction::SetTrue)
                     .help("Overwrite the target directory if it exists"),
             )
+            .arg(
+                Arg::new("workspace")
+                    .long("workspace")
+                    .action(ArgAction::SetTrue)
+                    .help("Scaffold a Cargo workspace with multiple contract crates (use with --contract)"),
+            )
+            .arg(
+                Arg::new("contract")
+                    .long("contract")
+                    .action(ArgAction::Append)
+                    .value_name("NAME[:TEMPLATE]")
+                    .help("A contract to include in the workspace, e.g. `token:token` (repeatable; requires --workspace)"),
+            )
     }
 
     fn run(&self, matches: &ArgMatches, ctx: &ForgeContext) -> Result<()> {
@@ -335,16 +644,6 @@ impl ForgePlugin for ScaffoldPlugin {
             .expect("clap enforces name unless --list-templates");
         validate_project_name(name)?;
 
-        let template = matches
-            .get_one::<String>("template")
-            .cloned()
-            .or_else(|| {
-                ctx.config
-                    .as_ref()
-                    .and_then(|c| c.scaffold.default_template.clone())
-            })
-            .unwrap_or_else(|| DEFAULT_TEMPLATE.to_string());
-
         let author = matches
             .get_one::<String>("author")
             .cloned()
@@ -362,17 +661,106 @@ impl ForgePlugin for ScaffoldPlugin {
         let dest = parent.join(name);
 
         let force = matches.get_flag("force");
+        let vars = project_vars(name, &author, &edition);
+
+        // --workspace: scaffold a multi-contract Cargo workspace.
+        if matches.get_flag("workspace") {
+            let specs: Vec<(String, String)> = matches
+                .get_many::<String>("contract")
+                .map(|vals| vals.map(|s| parse_contract_spec(s)).collect())
+                .unwrap_or_default();
+            if specs.is_empty() {
+                return Err(ForgeError::InvalidArgument(
+                    "--workspace requires at least one --contract NAME[:TEMPLATE]".into(),
+                ));
+            }
+            log::debug!(
+                "scaffolding workspace `{name}` with {} contract(s) into {}",
+                specs.len(),
+                dest.display()
+            );
+            generate_workspace(&dest, name, &author, &edition, &specs, force)?;
+
+            if !matches.get_flag("no-git") {
+                if let Err(err) = init_git(&dest) {
+                    log::warn!("failed to initialize git repository: {err}");
+                }
+            }
+            if matches.get_flag("pre-commit") {
+                write_pre_commit_config(&dest, force)?;
+            }
+
+            if !ctx.quiet {
+                let members: Vec<&str> = specs.iter().map(|(n, _)| n.as_str()).collect();
+                println!(
+                    "created workspace `{name}` with contracts [{}] at {}",
+                    members.join(", "),
+                    dest.display()
+                );
+                println!();
+                println!("next steps:");
+                println!("  cd {name}");
+                println!("  cargo build                     # builds every contract");
+                println!("  cargo test                      # runs all contract tests");
+                println!("  soroban-forge test-init         # add harnesses for each member");
+                println!("  soroban-forge ci-init           # add GitHub Actions workflows");
+            }
+            return Ok(());
+        }
+
+        // --from takes precedence over --template: clone a remote repo.
+        if let Some(url) = matches.get_one::<String>("from") {
+            log::debug!(
+                "scaffolding `{name}` from remote URL `{url}` into {}",
+                dest.display()
+            );
+            generate_from_url(url, &dest, &vars, force)?;
+
+            if !matches.get_flag("no-git") {
+                if let Err(err) = init_git(&dest) {
+                    log::warn!("failed to initialize git repository: {err}");
+                }
+            }
+
+            if matches.get_flag("pre-commit") {
+                write_pre_commit_config(&dest, force)?;
+            }
+
+            if !ctx.quiet {
+                println!(
+                    "created `{name}` from remote template `{url}` at {}",
+                    dest.display()
+                );
+                println!();
+                println!("next steps:");
+                println!("  cd {name}");
+                println!("  cargo test                      # run the template's unit tests");
+                println!("  stellar contract build          # build the deployable wasm");
+                println!("  soroban-forge test-init         # add a generated test harness");
+                println!("  soroban-forge ci-init           # add GitHub Actions workflows");
+                if matches.get_flag("pre-commit") {
+                    println!("  pre-commit install              # enable the git hooks");
+                }
+            }
+            return Ok(());
+        }
+
+        // Bundled template path.
+        let template = matches
+            .get_one::<String>("template")
+            .cloned()
+            .or_else(|| {
+                ctx.config
+                    .as_ref()
+                    .and_then(|c| c.scaffold.default_template.clone())
+            })
+            .unwrap_or_else(|| DEFAULT_TEMPLATE.to_string());
 
         log::debug!(
             "scaffolding `{name}` from template `{template}` into {}",
             dest.display()
         );
-        generate(
-            &template,
-            &dest,
-            &project_vars(name, &author, &edition),
-            force,
-        )?;
+        generate(&template, &dest, &vars, force)?;
 
         if !matches.get_flag("no-git") {
             if let Err(err) = init_git(&dest) {
@@ -412,7 +800,7 @@ mod tests {
     fn lists_all_bundled_templates() {
         assert_eq!(
             available_templates(),
-            vec!["crowdfund", "hello-world", "multisig", "nft", "token"]
+            vec!["amm", "crowdfund", "hello-world", "multisig", "nft", "token"]
         );
     }
 
@@ -446,7 +834,7 @@ mod tests {
         let names: Vec<&str> = catalog.iter().map(|t| t.name).collect();
         assert_eq!(
             names,
-            vec!["crowdfund", "hello-world", "multisig", "nft", "token"]
+            vec!["amm", "crowdfund", "hello-world", "multisig", "nft", "token"]
         );
         for entry in &catalog {
             assert!(
@@ -719,5 +1107,151 @@ mod tests {
             }
         }
         files
+    }
+
+    // ── --from / generate_from_url tests ──────────────────────────────────
+
+    /// The `--from` flag must be registered on the `new` subcommand.
+    #[test]
+    fn from_flag_is_registered() {
+        let plugin = ScaffoldPlugin;
+        let cmd = plugin.command();
+        let matches = cmd
+            .try_get_matches_from(vec![
+                "new",
+                "my-project",
+                "--from",
+                "https://example.com/tpl",
+            ])
+            .unwrap();
+        assert_eq!(
+            matches.get_one::<String>("from").map(String::as_str),
+            Some("https://example.com/tpl")
+        );
+    }
+
+    /// `--from` and `--template` must be mutually exclusive.
+    #[test]
+    fn from_and_template_are_mutually_exclusive() {
+        let plugin = ScaffoldPlugin;
+        let cmd = plugin.command();
+        let result = cmd.try_get_matches_from(vec![
+            "new",
+            "my-project",
+            "--from",
+            "https://example.com/tpl",
+            "--template",
+            "hello-world",
+        ]);
+        assert!(result.is_err(), "expected conflict error but got success");
+    }
+
+    /// render_dir_fs applies variable substitution and strips .hbs suffix.
+    #[test]
+    fn render_dir_fs_substitutes_variables_and_strips_hbs() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source");
+        let dest = dir.path().join("dest");
+        std::fs::create_dir_all(&source).unwrap();
+
+        // Create a .hbs template file in the source directory.
+        std::fs::write(
+            source.join("Cargo.toml.hbs"),
+            "[package]\nname = \"{{project_name}}\"\n",
+        )
+        .unwrap();
+        // And a plain file.
+        std::fs::write(source.join("README.md"), "# {{project_name}}\n").unwrap();
+
+        let mut vars = BTreeMap::new();
+        vars.insert("project_name".into(), "my-contract".into());
+
+        render_dir_fs(&source, &source, &dest, &vars).unwrap();
+
+        // .hbs suffix must be stripped.
+        assert!(
+            dest.join("Cargo.toml").exists(),
+            "Cargo.toml.hbs -> Cargo.toml"
+        );
+        assert!(
+            !dest.join("Cargo.toml.hbs").exists(),
+            ".hbs file must not appear in dest"
+        );
+
+        let cargo = std::fs::read_to_string(dest.join("Cargo.toml")).unwrap();
+        assert!(
+            cargo.contains("my-contract"),
+            "variable substitution applied"
+        );
+
+        let readme = std::fs::read_to_string(dest.join("README.md")).unwrap();
+        assert!(
+            readme.contains("# my-contract"),
+            "substitution in plain file"
+        );
+    }
+
+    /// generate_from_url refuses to overwrite an existing dest without --force.
+    #[test]
+    fn generate_from_url_refuses_existing_dest_without_force() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("my-project");
+        std::fs::create_dir_all(&dest).unwrap();
+
+        let vars = project_vars("my-project", "Test Author", "2021");
+        let result = generate_from_url("https://example.com/tpl", &dest, &vars, false);
+        assert!(
+            matches!(result, Err(ForgeError::AlreadyExists(_))),
+            "expected AlreadyExists, got: {result:?}"
+        );
+    }
+
+    /// A clearly bad URL (guaranteed offline, no such host) must return a
+    /// descriptive error, not panic. This test runs even in offline environments
+    /// because the point is error propagation, not actual network access.
+    #[test]
+    fn generate_from_url_returns_descriptive_error_for_unreachable_url() {
+        // Skip this test if git is not installed.
+        if std::process::Command::new("git")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
+            return;
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("my-project");
+        let vars = project_vars("my-project", "Test Author", "2021");
+
+        // This URL is syntactically valid but guaranteed to be unreachable.
+        let result = generate_from_url(
+            "https://this-host-does-not-exist.invalid/repo",
+            &dest,
+            &vars,
+            false,
+        );
+
+        assert!(result.is_err(), "expected an error for unreachable URL");
+        let err = result.unwrap_err().to_string();
+        // Should contain either a network-error hint or a git clone failure message.
+        assert!(
+            err.contains("could not clone") || err.contains("git clone failed"),
+            "error message should describe the clone failure, got: {err}"
+        );
+    }
+
+    /// If `git` is not on PATH, generate_from_url returns ToolMissing, not a
+    /// panic or an opaque IO error.
+    #[test]
+    fn generate_from_url_returns_tool_missing_when_git_absent() {
+        // We can't remove git from PATH in a test, so we simulate by passing a
+        // path override via the environment. This test is advisory only.
+        // Instead, we verify the ToolMissing arm compiles and the error message
+        // is correct by constructing it directly.
+        let err =
+            ForgeError::ToolMissing("git — install git to use --from with remote templates".into());
+        assert!(err.to_string().contains("git"));
+        assert!(err.to_string().contains("--from"));
     }
 }

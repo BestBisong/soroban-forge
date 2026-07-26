@@ -1,0 +1,25 @@
+# Applies the module:* labels to PRs based on the paths they touch.
+# The path -> label map lives in .github/labeler.yml.
+name: labeler
+
+# pull_request_target (not pull_request) so PRs opened from forks still get a
+# token with pull-requests: write. Safe here because labeler never checks out
+# or executes the PR's code -- it only reads the changed-file list via the API.
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  label:
+    name: apply module labels
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/labeler@v5
+        with:
+          # Re-evaluate on every push: a PR that stops touching a crate loses
+          # that crate's label. Set to false to make labels add-only.
+          sync-labels: true

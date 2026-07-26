@@ -2,6 +2,7 @@ use soroban_forge_core::ForgePlugin;
 
 fn main() {
     let plugins: Vec<Box<dyn ForgePlugin>> = vec![
+        Box::new(soroban_forge_core::ConfigPlugin),
         Box::new(soroban_forge_scaffold::ScaffoldPlugin),
         Box::new(soroban_forge_testgen::TestgenPlugin),
         Box::new(soroban_forge_ci_presets::CiPresetsPlugin),

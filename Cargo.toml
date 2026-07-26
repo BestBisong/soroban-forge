@@ -19,6 +19,7 @@ soroban-forge-ci-presets = { path = "crates/ci-presets" }
 soroban-forge-doctor = { path = "crates/doctor" }
 soroban-forge-bindings-ts = { path = "crates/binding-ts" }
 soroban-forge-templates = { path = "crates/templates" }
+soroban-forge-verify = { path = "crates/verify" }
 
 [dev-dependencies]
 tempfile.workspace = true
@@ -48,3 +49,4 @@ log = "0.4"
 env_logger = "0.11"
 include_dir = "0.7"
 tempfile = "3"
+sha2 = "0.10"

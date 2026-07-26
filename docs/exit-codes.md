@@ -8,7 +8,7 @@ changes and will be called out in the changelog.
 | code | meaning        | examples                                                                 |
 |------|----------------|---------------------------------------------------------------------------|
 | `0`  | success        | the subcommand completed without error                                    |
-| `1`  | user error     | invalid arguments, a bad `forge.toml`, an unknown template, an output path that already exists without `--force` |
+| `1`  | user error     | invalid arguments, a bad `forge.toml`, an unknown template, an output path that already exists without `--force`, a `verify` hash mismatch |
 | `2`  | tool missing   | `stellar-cli` not found, `rustc`/`cargo` missing or below the minimum version, the `wasm32v1-none` target not installed — anything `soroban-forge doctor` would flag, or a plugin (e.g. `bindings ts`) failing because it couldn't find the external tool it wraps |
 | `3`  | internal error | an I/O failure (can't read/write a file), or anything not classified above |
 

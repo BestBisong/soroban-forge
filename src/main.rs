@@ -9,6 +9,7 @@ fn main() {
         Box::new(soroban_forge_doctor::DoctorPlugin),
         Box::new(soroban_forge_bindings_ts::BindingsTsPlugin),
         Box::new(soroban_forge_templates::TemplatesPlugin),
+        Box::new(soroban_forge_verify::VerifyPlugin),
     ];
 
     if let Err(err) = soroban_forge_core::run(plugins) {

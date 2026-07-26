@@ -14,28 +14,35 @@
 
 [![asciinema cast](https://asciinema.org/a/soroban-forge-zero-to-testnet.svg)](https://asciinema.org/a/soroban-forge-zero-to-testnet)
 
+You need Rust ≥ 1.84 ([rustup](https://rustup.rs)) and `git`. The two remaining
+pieces — the `wasm32v1-none` target and `stellar-cli` — are what `doctor --fix`
+installs in step 2.
+
 ```sh
-# 1. install (from source, v0.1)
+# 1. install soroban-forge (from source, v0.1)
 git clone https://github.com/soroban-forge-labs/soroban-forge
-cd soroban-forge && cargo install --path .
+cd soroban-forge && cargo install --path . && cd ..
 
-# 2. check your environment
-soroban-forge doctor
+# 2. install anything missing from your toolchain, then re-check
+#    (--fix prompts before running each install; drop it to only report)
+soroban-forge doctor --fix
 
-# 3. create a project (templates: hello-world, nft, token, crowdfund)
+# 3. create a project (`soroban-forge templates` lists all six)
 soroban-forge new my-token --template token
 cd my-token
 
-# 4. it builds and passes tests out of the box
-cargo test
+# 4. build the deployable wasm -> target/wasm32v1-none/release/my_token.wasm
 stellar contract build
 
-# 5. add a generated test harness and CI
-soroban-forge test-init --force
-soroban-forge ci-init --deploy
+# 5. run the tests — the template passes them out of the box
+cargo test
 ```
 
-new:
+Step 5 should end in `test result: ok. 6 passed; 0 failed`. From here,
+`soroban-forge test-init --force` adds a generated test harness with fixtures
+and a snapshot helper, and `soroban-forge ci-init --deploy` writes GitHub
+Actions workflows for build+test, contract size and manual testnet deploys.
+
 New to Soroban entirely? Follow the full walkthrough:
 [docs/tutorial-zero-to-testnet.md](docs/tutorial-zero-to-testnet.md).
 
@@ -47,6 +54,7 @@ Hitting an error? Check the
 | command                          | what it does                                              |
 |----------------------------------|-----------------------------------------------------------|
 | `new <name> --template <t>`      | scaffold a project (`--list-templates` to see options)    |
+| `templates`                      | list the bundled templates with a one-line description    |
 | `test-init`                      | generate `tests/` fixtures + smoke test for a contract    |
 | `ci-init --provider github`      | write CI workflows; `--deploy` adds manual testnet deploy |
 | `doctor`                         | check rustc/cargo, `wasm32v1-none` target, stellar-cli    |

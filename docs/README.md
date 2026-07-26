@@ -55,10 +55,10 @@
 ## Architecture & Reference
 
 - **[Architecture](architecture.md)** — how the five modules fit together.
-- **[Exit Codes](exit-codes.md)** — the stable exit-code contract for CI/scripts.
-- **[Contributing](contributing.md)** — setup and contribution guidelines.
-
----
+- **[SDK Upgrade & Migration Guide](upgrade-guide.md)** — how to migrate generated projects across SDK major versions.
+- **[Troubleshooting / FAQ](troubleshooting.md)** — fixes for common setup
+  and build failures.
+- **[Exit codes](exit-codes.md)** — the stable exit-code contract for CI/scripts.
 
 Per-module reference docs live next to the code, one README per module:
 

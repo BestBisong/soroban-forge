@@ -13,6 +13,7 @@ five hundred) can work in parallel with minimal merge conflicts.
 | 4 — CI/CD & DevOps presets | `crates/ci-presets`, `presets/` | Person D | `ci-init` |
 | 5 — Docs, examples & DX | `crates/doctor`, `docs/`, `examples/` | Person E | `doctor` |
 | 6 — TypeScript bindings generator | `crates/bindings-ts` | Person F | `bindings ts` |
+| 7 — Deployment verification | `crates/verify` | Person G | `verify` |
 
 Rules of the road:
 

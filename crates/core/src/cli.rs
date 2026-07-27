@@ -53,6 +53,14 @@ pub fn build_command(plugins: &[Box<dyn ForgePlugin>]) -> Command {
                 .global(true)
                 .action(ArgAction::SetTrue)
                 .help("Emit machine-readable JSON output"),
+        )
+        .arg(
+            Arg::new("yes")
+                .long("yes")
+                .short('y')
+                .global(true)
+                .action(ArgAction::SetTrue)
+                .help("Auto-confirm all interactive prompts"),
         );
     for plugin in plugins {
         cmd = cmd.subcommand(plugin.command());
@@ -65,6 +73,7 @@ pub fn dispatch(plugins: &[Box<dyn ForgePlugin>], matches: &ArgMatches) -> Resul
     let verbose = matches.get_flag("verbose");
     let quiet = matches.get_flag("quiet");
     let json = matches.get_flag("json");
+    let yes = matches.get_flag("yes");
     let (name, sub_matches) = matches
         .subcommand()
         .ok_or_else(|| ForgeError::InvalidArgument("a subcommand is required".into()))?;
@@ -73,7 +82,7 @@ pub fn dispatch(plugins: &[Box<dyn ForgePlugin>], matches: &ArgMatches) -> Resul
     if let Some(plugin) = plugins.iter().find(|p| p.name() == name) {
         let cwd =
             std::env::current_dir().map_err(ForgeError::io("determining current directory"))?;
-        let ctx = ForgeContext::with_output(cwd, verbose, quiet, json)?;
+        let ctx = ForgeContext::with_output(cwd, verbose, quiet, json, yes)?;
         log::debug!("dispatching to plugin `{}`", plugin.name());
         return plugin.run(sub_matches, &ctx);
     }
@@ -326,6 +335,24 @@ mod tests {
             .unwrap();
         assert!(matches.get_flag("quiet"));
         assert!(matches.get_flag("verbose"));
+    }
+
+    #[test]
+    fn yes_is_global_flag() {
+        let (plugins, _) = dummy();
+        let matches = build_command(&plugins)
+            .try_get_matches_from(["soroban-forge", "--yes", "dummy", "--flag"])
+            .unwrap();
+        assert!(matches.get_flag("yes"));
+    }
+
+    #[test]
+    fn yes_works_after_subcommand() {
+        let (plugins, _) = dummy();
+        let matches = build_command(&plugins)
+            .try_get_matches_from(["soroban-forge", "dummy", "--flag", "--yes"])
+            .unwrap();
+        assert!(matches.get_flag("yes"));
     }
 
     #[test]

@@ -346,9 +346,75 @@ pub fn build_smoke_test(info: &ContractInfo) -> String {
         vars.insert("fn_name".into(), to_snake_case(ct));
         vars.insert("contract_args".into(), info.constructor_args.clone());
 
+        // When the contract has SAC token dependencies, emit fixture setup code
+        // that registers a Stellar Asset Contract and mints a test balance.
+        if info.has_token_deps {
+            let token_fixture = build_token_fixture(info);
+            out.push_str(&token_fixture);
+        }
+
         out.push_str(&render_str(SMOKE_TEST_FN, &vars));
     }
 
+    out
+}
+
+/// Build SAC token fixture setup code for contracts that accept token addresses.
+///
+/// When the contract source uses `TokenClient`, `StellarAssetClient`, or has
+/// constructor/method parameters named like `token*` / `asset*` typed as
+/// `Address`, this code is prepended to the smoke test so the tester can
+/// immediately mint balances and pass the SAC address to the contract.
+pub fn build_token_fixture(info: &ContractInfo) -> String {
+    let mut out = String::new();
+    out.push_str("\n// SAC token fixtures — detected token/asset Address dependencies.\n");
+    out.push_str("#[cfg(test)]\nmod token_fixtures {\n");
+    out.push_str("    use super::*;\n\n");
+    out.push_str("    /// Set up a Stellar Asset Contract (SAC) instance for testing.\n");
+    out.push_str("    /// `admin` is the issuing account; use `StellarAssetClient::mint`\n");
+    out.push_str("    /// (via `common::fund`) to credit test balances.\n");
+    out.push_str("    #[allow(dead_code)]\n");
+    out.push_str(
+        "    pub fn setup_token(env: &soroban_sdk::Env, admin: &soroban_sdk::Address)\n",
+    );
+    out.push_str("        -> (soroban_sdk::Address,\n");
+    out.push_str(
+        "            soroban_sdk::token::TokenClient,\n",
+    );
+    out.push_str(
+        "            soroban_sdk::token::StellarAssetClient)\n",
+    );
+    out.push_str("    {\n");
+    out.push_str("        common::create_token(env, admin)\n");
+    out.push_str("    }\n\n");
+
+    // Emit one helper per detected token param name.
+    let names = if info.token_param_names.is_empty() {
+        vec!["token".to_string()]
+    } else {
+        info.token_param_names.clone()
+    };
+
+    for name in &names {
+        out.push_str(&format!(
+            "    /// Register a fresh SAC instance to use as `{}` in tests.\n",
+            name
+        ));
+        out.push_str("    #[allow(dead_code)]\n");
+        out.push_str(&format!(
+            "    pub fn register_{name}(env: &soroban_sdk::Env) -> soroban_sdk::Address {{\n"
+        ));
+        out.push_str(
+            "        let admin = soroban_sdk::testutils::Address::generate(env);\n",
+        );
+        out.push_str("        let sac = env.register_stellar_asset_contract_v2(admin.clone());\n");
+        out.push_str("        // Mint an initial balance for test accounts via:\n");
+        out.push_str("        //   soroban_sdk::token::StellarAssetClient::new(env, &sac.address()).mint(&recipient, &amount);\n");
+        out.push_str("        sac.address()\n");
+        out.push_str("    }\n\n");
+    }
+
+    out.push_str("}\n");
     out
 }
 
@@ -805,6 +871,12 @@ pub fn format_report(info: &ContractInfo, written: &[&str], fuzz: bool) -> Strin
             info.contract_types.join(", ")
         ));
     }
+    if info.has_token_deps {
+        out.push_str("\nnote: Stellar Asset Contract (SAC) token usage detected.\n");
+        out.push_str("token fixture helpers (`setup_token`, `register_*`) were generated in the\n");
+        out.push_str("smoke test's `token_fixtures` module. Use `common::create_token` and\n");
+        out.push_str("`common::fund` to mint test balances before calling contract methods.\n");
+    }
     if !info.events.is_empty() {
         out.push_str(&format!(
             "\nnote: {} event(s) detected via `env.events().publish(...)`.\n",
@@ -1004,6 +1076,8 @@ mod tests {
             constructor_arg_types: None,
             events: vec![],
             has_contractevent: false,
+            has_token_deps: false,
+            token_param_names: vec![],
         }
     }
 
@@ -1020,6 +1094,8 @@ mod tests {
             constructor_arg_types: None,
             events: vec![],
             has_contractevent: false,
+            has_token_deps: false,
+            token_param_names: vec![],
         }
     }
 

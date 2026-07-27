@@ -21,6 +21,7 @@ soroban-forge-bindings-ts = { path = "crates/binding-ts" }
 soroban-forge-templates = { path = "crates/templates" }
 soroban-forge-verify = { path = "crates/verify" }
 soroban-forge-identity = { path = "crates/identity" }
+clap_complete.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
@@ -42,6 +43,7 @@ rust-version = "1.84"
 soroban-forge-core = { path = "crates/core" }
 soroban-forge-scaffold = { path = "crates/scaffold" }
 clap = "4.5"
+clap_complete = "4.5"
 thiserror = "2.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

@@ -8,6 +8,7 @@ for the template format and how to add a new one.
 - `nft` — non-fungible token with metadata, minting and burning
 - `token` — SEP-41 fungible token (`soroban_sdk::token::TokenInterface`)
 - `crowdfund` — escrow/deadline crowdfunding example
+- `upgradeable` — admin-gated upgradeable contract (`update_current_contract_wasm`)
 
 Manifests are shipped as `Cargo.toml.hbs` so cargo doesn't treat these
 directories as packages; the `.hbs` suffix is stripped when a project is

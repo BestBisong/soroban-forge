@@ -578,7 +578,7 @@ impl ForgePlugin for DoctorPlugin {
     fn run(&self, matches: &ArgMatches, ctx: &ForgeContext) -> Result<()> {
         let use_json = ctx.json || matches.get_flag("json");
         let do_fix = matches.get_flag("fix");
-        let assume_yes = matches.get_flag("yes");
+        let assume_yes = ctx.yes || matches.get_flag("yes");
 
         let mut checks = self.gather_checks(ctx);
 

@@ -14,6 +14,7 @@ use clap::{Arg, ArgAction, ArgMatches, Command};
 use crate::error::{ForgeError, Result};
 use crate::plugin::{ForgeContext, ForgePlugin};
 
+
 /// Build the top-level `soroban-forge` command from the registered plugins.
 pub fn build_command(plugins: &[Box<dyn ForgePlugin>]) -> Command {
     let mut cmd = Command::new("soroban-forge")
@@ -65,6 +66,17 @@ pub fn build_command(plugins: &[Box<dyn ForgePlugin>]) -> Command {
     for plugin in plugins {
         cmd = cmd.subcommand(plugin.command());
     }
+    cmd = cmd.subcommand(
+        Command::new("completions")
+            .about("Generate shell completion scripts and print them to stdout")
+            .arg(
+                Arg::new("shell")
+                    .value_name("SHELL")
+                    .required(true)
+                    .value_parser(["bash", "zsh", "fish"])
+                    .help("Shell to generate completions for"),
+            ),
+    );
     cmd
 }
 

@@ -101,12 +101,14 @@ mod tests {
             ("crowdfund", "escrow/deadline crowdfunding contract"),
             ("hello-world", "minimal greeter contract (recommended starting point)"),
             ("nft", "NFT (non-fungible token) with per-token metadata"),
+            ("staking", "proportional reward staking"),
             ("token", "SEP-41 fungible token"),
         ]);
         let output = format_template_listing(&catalog);
         assert!(output.contains("crowdfund"));
         assert!(output.contains("hello-world"));
         assert!(output.contains("nft"));
+        assert!(output.contains("staking"));
         assert!(output.contains("token"));
     }
 
@@ -116,12 +118,14 @@ mod tests {
             ("crowdfund", "escrow/deadline crowdfunding contract"),
             ("hello-world", "minimal greeter contract (recommended starting point)"),
             ("nft", "NFT (non-fungible token) with per-token metadata"),
+            ("staking", "proportional reward staking with O(1) acc_reward_per_share accumulator"),
             ("token", "SEP-41 fungible token"),
         ]);
         let output = format_template_listing(&catalog);
         assert!(output.contains("escrow/deadline crowdfunding contract"));
         assert!(output.contains("minimal greeter contract"));
         assert!(output.contains("NFT (non-fungible token)"));
+        assert!(output.contains("proportional reward staking"));
         assert!(output.contains("SEP-41 fungible token"));
     }
 

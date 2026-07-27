@@ -69,6 +69,7 @@ pub fn template_description(name: &str) -> Option<&'static str> {
         "hello-world" => Some("minimal greeter contract (recommended starting point)"),
         "multisig" => Some("M-of-N multisig account contract (CustomAccountInterface)"),
         "nft" => Some("NFT (non-fungible token) with per-token metadata and minting"),
+        "staking" => Some("proportional reward staking with O(1) acc_reward_per_share accumulator"),
         "token" => Some("SEP-41 fungible token (soroban_sdk::token::TokenInterface)"),
         _ => None,
     }
@@ -800,7 +801,7 @@ mod tests {
     fn lists_all_bundled_templates() {
         assert_eq!(
             available_templates(),
-            vec!["amm", "crowdfund", "hello-world", "multisig", "nft", "token"]
+            vec!["amm", "crowdfund", "hello-world", "multisig", "nft", "staking", "token"]
         );
     }
 
@@ -834,7 +835,7 @@ mod tests {
         let names: Vec<&str> = catalog.iter().map(|t| t.name).collect();
         assert_eq!(
             names,
-            vec!["amm", "crowdfund", "hello-world", "multisig", "nft", "token"]
+            vec!["amm", "crowdfund", "hello-world", "multisig", "nft", "staking", "token"]
         );
         for entry in &catalog {
             assert!(

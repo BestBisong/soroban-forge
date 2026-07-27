@@ -27,6 +27,12 @@ use soroban_forge_scaffold::SOROBAN_SDK_VERSION;
 /// Minimum Rust version able to target `wasm32v1-none`.
 pub const MIN_RUST: (u32, u32) = (1, 84); // minimum major.minor
 
+/// Minimum `stellar` CLI version required.
+pub const MIN_STELLAR: (u32, u32) = (21, 0);
+
+/// Default Soroban RPC endpoint used for the connectivity check.
+pub const TESTNET_RPC_URL: &str = "https://soroban-testnet.stellar.org";
+
 /// Outcome of a single environment check.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -190,6 +196,143 @@ pub fn sdk_version_check(project_dir: &Path) -> Option<Check> {
     })
 }
 
+/// Check whether `url` is reachable with an HTTP GET, returning latency in ms.
+///
+/// Uses `curl` as a subprocess to avoid pulling in an HTTP client dependency.
+/// A 5-second timeout is applied; failures (network error, timeout, non-2xx)
+/// are reported as `Warn` rather than `Fail` so an offline developer is not
+/// blocked.
+pub fn rpc_connectivity_check(url: &str) -> Check {
+    use std::time::Instant;
+    let start = Instant::now();
+    // -s silent, -o /dev/null discard body, -w write status code,
+    // --max-time 5 abort after 5 s, -L follow redirects.
+    let output = std::process::Command::new("curl")
+        .args(["-s", "-o", "/dev/null", "-w", "%{http_code}", "--max-time", "5", "-L", url])
+        .output();
+    let elapsed_ms = start.elapsed().as_millis();
+    match output {
+        Ok(o) if o.status.success() => {
+            let code_str = String::from_utf8_lossy(&o.stdout);
+            let code: u16 = code_str.trim().parse().unwrap_or(0);
+            if (200..400).contains(&code) {
+                Check {
+                    name: "testnet RPC",
+                    status: Status::Pass,
+                    detail: format!("{url} — HTTP {code} ({elapsed_ms} ms)"),
+                    fix: None,
+                }
+            } else {
+                Check {
+                    name: "testnet RPC",
+                    status: Status::Warn,
+                    detail: format!("{url} — HTTP {code} ({elapsed_ms} ms)"),
+                    fix: Some("check your network connection or configure a different RPC endpoint"),
+                }
+            }
+        }
+        Ok(_) | Err(_) => Check {
+            name: "testnet RPC",
+            status: Status::Warn,
+            detail: format!("{url} — unreachable (timeout or network error, {elapsed_ms} ms)"),
+            fix: Some("check your network connection or configure a different RPC endpoint"),
+        },
+    }
+}
+
+/// Check that [profile.release] in `Cargo.toml` is size-optimised.
+///
+/// Looks for `opt-level = "z"`, `lto = true`, and `codegen-units = 1`.
+/// Returns one [`Check`] per missing setting (or an empty `Vec` when the
+/// manifest is not a Cargo project or already has all three settings).
+pub fn release_profile_checks(project_dir: &Path) -> Vec<Check> {
+    let contents = match std::fs::read_to_string(project_dir.join("Cargo.toml")) {
+        Ok(c) => c,
+        Err(_) => return vec![],
+    };
+    let manifest: toml::Value = match toml::from_str(&contents) {
+        Ok(v) => v,
+        Err(_) => return vec![],
+    };
+    let profile_release = match manifest
+        .get("profile")
+        .and_then(|p| p.get("release"))
+    {
+        Some(t) => t,
+        None => {
+            // No [profile.release] at all — warn for all three settings.
+            return vec![
+                Check {
+                    name: "release opt-level",
+                    status: Status::Warn,
+                    detail: "opt-level not set in [profile.release]".into(),
+                    fix: Some(r#"add to Cargo.toml: [profile.release]\nopt-level = "z""#),
+                },
+                Check {
+                    name: "release lto",
+                    status: Status::Warn,
+                    detail: "lto not set in [profile.release]".into(),
+                    fix: Some("add to Cargo.toml: [profile.release]\nlto = true"),
+                },
+                Check {
+                    name: "release codegen-units",
+                    status: Status::Warn,
+                    detail: "codegen-units not set in [profile.release]".into(),
+                    fix: Some("add to Cargo.toml: [profile.release]\ncodegen-units = 1"),
+                },
+            ];
+        }
+    };
+
+    let mut checks = Vec::new();
+
+    // opt-level = "z"
+    let opt_ok = profile_release
+        .get("opt-level")
+        .and_then(|v| v.as_str())
+        .map(|s| s == "z")
+        .unwrap_or(false);
+    if !opt_ok {
+        checks.push(Check {
+            name: "release opt-level",
+            status: Status::Warn,
+            detail: "opt-level is not \"z\" in [profile.release]".into(),
+            fix: Some(r#"set in Cargo.toml: [profile.release]\nopt-level = "z""#),
+        });
+    }
+
+    // lto = true
+    let lto_ok = profile_release
+        .get("lto")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    if !lto_ok {
+        checks.push(Check {
+            name: "release lto",
+            status: Status::Warn,
+            detail: "lto is not true in [profile.release]".into(),
+            fix: Some("set in Cargo.toml: [profile.release]\nlto = true"),
+        });
+    }
+
+    // codegen-units = 1
+    let cgu_ok = profile_release
+        .get("codegen-units")
+        .and_then(|v| v.as_integer())
+        .map(|n| n == 1)
+        .unwrap_or(false);
+    if !cgu_ok {
+        checks.push(Check {
+            name: "release codegen-units",
+            status: Status::Warn,
+            detail: "codegen-units is not 1 in [profile.release]".into(),
+            fix: Some("set in Cargo.toml: [profile.release]\ncodegen-units = 1"),
+        });
+    }
+
+    checks
+}
+
 /// Run all environment checks.
 pub fn run_checks() -> Vec<Check> {
     let mut checks = Vec::new();
@@ -260,13 +403,61 @@ pub fn run_checks() -> Vec<Check> {
         },
     });
 
-    // stellar-cli.
+    // wasm32-unknown-unknown target (issue #45).
+    //
+    // Some toolchains and projects still require the older `wasm32-unknown-unknown`
+    // target alongside the newer `wasm32v1-none`. Check for it explicitly.
+    {
+        let installed_targets_wasm32 = std::process::Command::new("rustup")
+            .args(["target", "list", "--installed"])
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned());
+        checks.push(match installed_targets_wasm32 {
+            Some(targets) if targets.lines().any(|t| t.trim() == "wasm32-unknown-unknown") => {
+                Check {
+                    name: "wasm32-unknown-unknown",
+                    status: Status::Pass,
+                    detail: "installed".into(),
+                    fix: None,
+                }
+            }
+            Some(_) => Check {
+                name: "wasm32-unknown-unknown",
+                status: Status::Fail,
+                detail: "missing wasm32 target".into(),
+                fix: Some("rustup target add wasm32-unknown-unknown"),
+            },
+            None => Check {
+                name: "wasm32-unknown-unknown",
+                status: Status::Warn,
+                detail: "rustup not found — could not verify".into(),
+                fix: Some(
+                    "install rustup (https://rustup.rs), then: rustup target add wasm32-unknown-unknown",
+                ),
+            },
+        });
+    }
+
+    // stellar-cli — presence and minimum version (issue #47).
     checks.push(match capture("stellar", &["--version"]) {
-        Some(line) => Check {
+        Some(line) if version_at_least(&line, MIN_STELLAR) => Check {
             name: "stellar-cli",
             status: Status::Pass,
             detail: line,
             fix: None,
+        },
+        Some(line) => Check {
+            name: "stellar-cli",
+            status: Status::Warn,
+            detail: format!(
+                "{line} (need >= {}.{}.0)",
+                MIN_STELLAR.0, MIN_STELLAR.1
+            ),
+            fix: Some(
+                "upgrade: cargo install --locked stellar-cli  (or: brew upgrade stellar-cli)",
+            ),
         },
         None => Check {
             name: "stellar-cli",
@@ -277,6 +468,9 @@ pub fn run_checks() -> Vec<Check> {
             ),
         },
     });
+
+    // Testnet RPC connectivity (issue #46).
+    checks.push(rpc_connectivity_check(TESTNET_RPC_URL));
 
     // git — recommended only.
     checks.push(match capture("git", &["--version"]) {
@@ -503,6 +697,8 @@ impl DoctorPlugin {
         if let Some(check) = sdk_version_check(&ctx.cwd) {
             checks.push(check);
         }
+        // Release profile size-optimisation checks (issue #48).
+        checks.extend(release_profile_checks(&ctx.cwd));
         checks
     }
 

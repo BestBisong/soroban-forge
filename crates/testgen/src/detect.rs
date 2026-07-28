@@ -33,6 +33,19 @@ pub struct ContractInfo {
     /// to construct the fuzz target's constructor prototype. `None` when the
     /// contract has no `__constructor` inside a `#[contractimpl]` block.
     pub constructor_arg_types: Option<Vec<(String, String)>>,
+    /// Events detected in contract methods via `env.events().publish(...)` or
+    /// `#[contractevent]` attributes. Used to generate event-specific tests.
+    pub events: Vec<EventInfo>,
+    /// Whether the contract source contains any `#[contractevent]` attributes.
+    pub has_contractevent: bool,
+    /// Whether the contract source contains token address usage patterns that
+    /// suggest it interacts with Stellar Asset Contract (SAC) tokens. When
+    /// `true`, the generated test harness will include `create_token` / `fund`
+    /// fixture helpers and register a SAC instance alongside the contract.
+    pub has_token_deps: bool,
+    /// Token parameter names detected in constructor or contract methods (e.g.
+    /// `token`, `token_a`, `asset`). Used to generate meaningful fixture names.
+    pub token_param_names: Vec<String>,
 }
 
 /// A contract method discovered inside a `#[contractimpl]` block.
@@ -42,6 +55,20 @@ pub struct MethodInfo {
     pub name: String,
     /// `(name, type)` pairs for each parameter (excluding the `env` receiver).
     pub args: Vec<(String, String)>,
+}
+
+/// A contract event detected from `env.events().publish(...)` calls or
+/// `#[contractevent]` attributes.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct EventInfo {
+    /// The method that publishes this event, e.g. `mint`.
+    pub method: String,
+    /// Topic expressions extracted from the publish call (e.g. `symbol_short!("mint")`,
+    /// `from`). Used in test assertions against `env.events().all()`.
+    pub topics: Vec<String>,
+    /// The data expression from the publish call (e.g. `amount`, `(amount, exp)`).
+    /// `None` when the event publishes only topics.
+    pub data: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -94,6 +121,10 @@ pub fn inspect(dir: &Path) -> Result<ContractInfo> {
     };
 
     let (methods, constructor_arg_types) = find_methods(&source);
+    let events = find_events(&source);
+    let has_contractevent = has_contractevent(&source);
+
+    let (has_token_deps, token_param_names) = detect_token_usage(&source);
 
     Ok(ContractInfo {
         crate_name: manifest.package.name.replace('-', "_"),
@@ -105,6 +136,10 @@ pub fn inspect(dir: &Path) -> Result<ContractInfo> {
         has_proptest: manifest_has_proptest(&manifest.dev_dependencies),
         methods,
         constructor_arg_types,
+        events,
+        has_contractevent,
+        has_token_deps,
+        token_param_names,
     })
 }
 
@@ -236,6 +271,64 @@ pub fn map_type_to_default(ty: &str) -> String {
     } else {
         "Default::default()".to_string()
     }
+}
+
+/// Detect whether the contract source uses Stellar Asset Contract (SAC) token
+/// patterns. Returns `(has_token_deps, token_param_names)`.
+///
+/// Detection heuristics (any one match triggers `true`):
+/// - Constructor or method parameter with a name containing "token" or "asset"
+///   and a type of `Address` — the classic SAC pass-by-address pattern.
+/// - Source contains `TokenClient` or `StellarAssetClient` imports/usage.
+/// - Source contains `register_stellar_asset_contract_v2` (already set up by
+///   caller code in the same crate).
+/// - Source contains `token::` namespace access (e.g. `token::Client`).
+///
+/// The returned `token_param_names` list collects the detected parameter names
+/// (deduplicated, stable order) for use in fixture generation.
+pub fn detect_token_usage(source: &str) -> (bool, Vec<String>) {
+    let mut param_names: Vec<String> = Vec::new();
+
+    // Fast checks on the raw source.
+    let raw_hit = source.contains("TokenClient")
+        || source.contains("StellarAssetClient")
+        || source.contains("register_stellar_asset_contract_v2")
+        || source.contains("token::Client")
+        || source.contains("token::StellarAssetClient");
+
+    // Walk method/constructor parameters to find Address-typed "token*" / "asset*" names.
+    // Tokenise just enough to extract parameter declarations.
+    let token_keywords = ["token", "asset"];
+
+    // Simple line-by-line scan for `name: Address` patterns where `name`
+    // contains a token keyword.
+    for line in source.lines() {
+        let line = line.trim();
+        // Match patterns like `token: Address`, `token_a: Address`, `asset: Address`.
+        if let Some(colon_idx) = line.find(':') {
+            let name_part = line[..colon_idx].trim();
+            let type_part = line[colon_idx + 1..].trim();
+            // Strip trailing `,` or `)` from type.
+            let type_clean: String = type_part
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '<' || *c == '>')
+                .collect();
+            if type_clean == "Address" || type_clean == "Address>" {
+                // Only the final segment of the name (after any `mut ` prefix).
+                let name = name_part.trim_start_matches("mut ").trim();
+                let lower = name.to_lowercase();
+                if token_keywords.iter().any(|kw| lower.contains(kw)) {
+                    let owned = name.to_string();
+                    if !param_names.contains(&owned) {
+                        param_names.push(owned);
+                    }
+                }
+            }
+        }
+    }
+
+    let has_token_deps = raw_hit || !param_names.is_empty();
+    (has_token_deps, param_names)
 }
 
 /// Find all structs annotated with `#[contract]` (exactly — not
@@ -404,6 +497,227 @@ pub fn find_methods(source: &str) -> (Vec<MethodInfo>, Option<Vec<(String, Strin
     (methods, constructor_args)
 }
 
+/// Find `env.events().publish(...)` calls in the source and return their
+/// event info (method name, topics, data).
+pub fn find_events(source: &str) -> Vec<EventInfo> {
+    let mut events = Vec::new();
+
+    let mut tokens = Vec::new();
+    let mut current_word = String::new();
+    for c in source.chars() {
+        if c.is_alphanumeric() || c == '_' {
+            current_word.push(c);
+        } else {
+            if !current_word.is_empty() {
+                tokens.push(current_word.clone());
+                current_word.clear();
+            }
+            if !c.is_whitespace() {
+                tokens.push(c.to_string());
+            }
+        }
+    }
+    if !current_word.is_empty() {
+        tokens.push(current_word);
+    }
+
+    let mut i = 0;
+    let mut current_method: Option<String> = None;
+    let mut brace_depth = 0;
+    let mut in_contract_impl = false;
+
+    while i < tokens.len() {
+        if tokens[i] == "#"
+            && i + 3 < tokens.len()
+            && tokens[i + 1] == "["
+            && tokens[i + 2] == "contractimpl"
+            && tokens[i + 3] == "]"
+        {
+            in_contract_impl = true;
+            i += 4;
+            continue;
+        }
+
+        if in_contract_impl && tokens[i] == "{" {
+            brace_depth += 1;
+        }
+
+        if in_contract_impl && tokens[i] == "}" {
+            brace_depth -= 1;
+            if brace_depth == 0 {
+                in_contract_impl = false;
+                current_method = None;
+            }
+        }
+
+        // Track which method we are in at the outermost brace depth inside
+        // a contractimpl block.
+        if in_contract_impl && brace_depth == 1 && tokens[i] == "fn" && i + 2 < tokens.len() {
+            current_method = Some(tokens[i + 1].clone());
+        }
+
+        // Detect `env.events().publish(...)` pattern.
+        if in_contract_impl
+            && tokens[i] == "env"
+            && i + 5 < tokens.len()
+            && tokens[i + 1] == "."
+            && tokens[i + 2] == "events"
+            && tokens[i + 3] == "("
+            && tokens[i + 4] == ")"
+            && i + 6 < tokens.len()
+            && tokens[i + 5] == "."
+            && tokens[i + 6] == "publish"
+            && i + 7 < tokens.len()
+            && tokens[i + 7] == "("
+        {
+            if let Some(method) = &current_method {
+                let mut depth = 1;
+                let mut j = i + 8;
+                let mut paren_content = String::new();
+                while j < tokens.len() && depth > 0 {
+                    if tokens[j] == "(" {
+                        depth += 1;
+                    } else if tokens[j] == ")" {
+                        depth -= 1;
+                        if depth == 0 {
+                            break;
+                        }
+                    }
+                    paren_content.push_str(&tokens[j]);
+                    j += 1;
+                }
+
+                let (topics, data) = parse_publish_args(&paren_content);
+                events.push(EventInfo {
+                    method: method.clone(),
+                    topics,
+                    data,
+                });
+            }
+            i = i + 8;
+            continue;
+        }
+
+        i += 1;
+    }
+
+    events
+}
+
+/// Detect `#[contractevent]` attributes in the source.
+pub fn has_contractevent(source: &str) -> bool {
+    source.contains("#[contractevent]")
+}
+
+/// Parse the arguments of an `env.events().publish(topics, data)` call.
+/// Returns `(topics, data)` where `topics` is the list of topic expressions
+/// and `data` is the data expression (if any).
+fn parse_publish_args(args: &str) -> (Vec<String>, Option<String>) {
+    let args = args.trim();
+    if args.is_empty() {
+        return (vec![], None);
+    }
+
+    let mut topics = Vec::new();
+    let mut data = None;
+
+    let mut depth = 0;
+    let mut split_pos = None;
+
+    for (idx, c) in args.char_indices() {
+        match c {
+            '(' | '<' | '[' => depth += 1,
+            ')' | '>' | ']' => depth -= 1,
+            ',' if depth == 0 => {
+                split_pos = Some(idx);
+                break;
+            }
+            _ => {}
+        }
+    }
+
+    if let Some(pos) = split_pos {
+        let topics_str = args[..pos].trim();
+        let data_str = args[pos + 1..].trim();
+        topics = split_topics(topics_str);
+        if !data_str.is_empty() {
+            data = Some(data_str.to_string());
+        }
+    } else {
+        topics = split_topics(args);
+    }
+
+    (topics, data)
+}
+
+/// Split the topics string at the top-level commas.
+/// For example, `(symbol_short!("mint"), from, to)` →
+/// `["(symbol_short!(\"mint\"))", "from", "to"]`.
+/// When the whole string is wrapped in a single outer paren group, the parens
+/// are stripped first so that the individual topics are returned.
+fn split_topics(topics: &str) -> Vec<String> {
+    let topics = topics.trim();
+    if topics.is_empty() {
+        return vec![];
+    }
+
+    // Check if the entire string is wrapped in matching outer parens.
+    let has_outer_parens = {
+        let mut d = 0;
+        let mut found = false;
+        for (i, c) in topics.char_indices() {
+            match c {
+                '(' => d += 1,
+                ')' => {
+                    d -= 1;
+                    if d == 0 && i == topics.len() - 1 {
+                        found = true;
+                    }
+                }
+                _ => {}
+            }
+        }
+        found
+    };
+
+    let inner = if has_outer_parens {
+        &topics[1..topics.len() - 1]
+    } else {
+        topics
+    };
+
+    let mut result = Vec::new();
+    let mut current = String::new();
+    let mut depth = 0;
+    for c in inner.chars() {
+        match c {
+            '(' | '<' | '[' => {
+                depth += 1;
+                current.push(c);
+            }
+            ')' | '>' | ']' => {
+                depth -= 1;
+                current.push(c);
+            }
+            ',' if depth == 0 => {
+                let trimmed = current.trim().to_string();
+                if !trimmed.is_empty() {
+                    result.push(trimmed);
+                }
+                current.clear();
+            }
+            _ => {
+                current.push(c);
+            }
+        }
+    }
+    let trimmed = current.trim().to_string();
+    if !trimmed.is_empty() {
+        result.push(trimmed);
+    }
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -475,6 +789,8 @@ soroban-sdk = { version = "1", features = ["testutils"] }
         assert!(info.has_testutils);
         assert_eq!(info.constructor_args, "()");
         assert!(info.methods.is_empty());
+        assert!(info.events.is_empty());
+        assert!(!info.has_contractevent);
     }
 
     #[test]
@@ -539,5 +855,123 @@ impl TokenInterface for TokenContract {
                 ("spender".to_string(), "Address".to_string())
             ]
         );
+    }
+
+    // ── event detection tests ──
+
+    #[test]
+    fn finds_events_in_contractimpl() {
+        let src = r#"
+#[contractimpl]
+impl TokenContract {
+    pub fn mint(env: Env, to: Address, amount: i128) {
+        env.events().publish(
+            (symbol_short!("mint"), to),
+            amount,
+        );
+    }
+    pub fn burn(env: Env, from: Address, amount: i128) {
+        env.events().publish(
+            (symbol_short!("burn"), from),
+            amount,
+        );
+    }
+}
+"#;
+        let events = find_events(src);
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].method, "mint");
+        assert_eq!(events[0].topics, vec!["(symbol_short!(\"mint\"))", "to"]);
+        assert_eq!(events[0].data, Some("amount".to_string()));
+        assert_eq!(events[1].method, "burn");
+        assert_eq!(events[1].topics, vec!["(symbol_short!(\"burn\"))", "from"]);
+        assert_eq!(events[1].data, Some("amount".to_string()));
+    }
+
+    #[test]
+    fn finds_events_with_complex_topics() {
+        let src = r#"
+#[contractimpl]
+impl TokenContract {
+    pub fn approve(env: Env, from: Address, spender: Address, amount: i128) {
+        env.events().publish(
+            (symbol_short!("approve"), from, spender),
+            (amount, 100u32),
+        );
+    }
+}
+"#;
+        let events = find_events(src);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].method, "approve");
+        assert_eq!(
+            events[0].topics,
+            vec!["(symbol_short!(\"approve\"))", "from", "spender"]
+        );
+        assert_eq!(events[0].data, Some("(amount, 100u32)".to_string()));
+    }
+
+    #[test]
+    fn finds_events_in_multiple_impl_blocks() {
+        let src = r#"
+#[contractimpl]
+impl TokenContract {
+    pub fn mint(env: Env, to: Address, amount: i128) {
+        env.events().publish((symbol_short!("mint"), to), amount);
+    }
+}
+#[contractimpl]
+impl TokenInterface for TokenContract {
+    fn transfer(env: Env, from: Address, to: Address, amount: i128) {
+        env.events().publish((symbol_short!("transfer"), from, to), amount);
+    }
+}
+"#;
+        let events = find_events(src);
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].method, "mint");
+        assert_eq!(events[1].method, "transfer");
+    }
+
+    #[test]
+    fn detects_contractevent_attribute() {
+        let src = r#"
+#[contractevent]
+pub struct Transfer {
+    pub from: Address,
+    pub to: Address,
+    pub amount: i128,
+}
+"#;
+        assert!(has_contractevent(src));
+    }
+
+    #[test]
+    fn no_events_when_no_publish_calls() {
+        let src = r#"
+#[contractimpl]
+impl Foo {
+    pub fn bar(env: Env) -> i32 { 42 }
+}
+"#;
+        let events = find_events(src);
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn finds_events_with_only_topics_no_data() {
+        let src = r#"
+#[contractimpl]
+impl Contract {
+    pub fn close(env: Env) {
+        env.events().publish((symbol_short!("close"),), ());
+    }
+}
+"#;
+        let events = find_events(src);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].method, "close");
+        assert_eq!(events[0].topics, vec!["(symbol_short!(\"close\"),)"]);
+        assert_eq!(events[0].data, Some("()".to_string()));
     }
 }

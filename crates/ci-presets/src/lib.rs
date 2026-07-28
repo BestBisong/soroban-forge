@@ -23,10 +23,16 @@ use soroban_forge_core::{ForgeContext, ForgeError, ForgePlugin, Result};
 
 static PRESETS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../../presets");
 
-/// Workflows always written.
-const BASE_WORKFLOWS: &[&str] = &["build-test.yml", "contract-size.yml"]; // base workflows
+/// Workflows always written (GitHub).
+const BASE_WORKFLOWS: &[&str] = &["build-test.yml", "contract-size.yml"];
 /// Workflow written only with `--deploy`.
 const DEPLOY_WORKFLOW: &str = "testnet-deploy.yml";
+/// Workflow written only with `--security-scan`.
+const SECURITY_SCAN_WORKFLOW: &str = "security-scan.yml";
+/// Deny config scaffolded alongside `--security-scan`.
+const DENY_TOML: &str = "deny.toml";
+/// Workflow written only with `--healthcheck`.
+const HEALTHCHECK_WORKFLOW: &str = "testnet-healthcheck.yml";
 
 /// Providers with a preset directory, sorted.
 pub fn available_providers() -> Vec<&'static str> {
@@ -43,6 +49,7 @@ pub fn output_dir(provider: &str) -> &'static str {
     match provider {
         "github" => ".github/workflows",
         "gitlab" => ".",
+        "circleci" => ".circleci",
         _ => unreachable!("validated against available_providers()"),
     }
 }
@@ -74,13 +81,25 @@ fn project_name(dir: &Path, ctx: &ForgeContext) -> String {
         .unwrap_or_else(|| "contract".to_string())
 }
 
+/// Options that control which optional workflows are emitted.
+#[derive(Debug, Default, Clone)]
+pub struct GenerateOptions {
+    /// Also write the manual testnet-deploy workflow.
+    pub deploy: bool,
+    /// Also write the security-scan workflow (cargo audit + cargo deny)
+    /// and scaffold a `deny.toml` config at the project root.
+    pub security_scan: bool,
+    /// Also write the scheduled testnet health-check workflow.
+    pub healthcheck: bool,
+}
+
 /// Write the workflows for `provider` into `dir`. Public API behind
 /// `ci-init`. Returns the paths written, relative to `dir`.
 pub fn generate(
     dir: &Path,
     provider: &str,
     project_name: &str,
-    deploy: bool,
+    opts: &GenerateOptions,
     force: bool,
 ) -> Result<Vec<String>> {
     let provider_dir = PRESETS.get_dir(provider).ok_or_else(|| {
@@ -99,15 +118,26 @@ pub fn generate(
     std::fs::create_dir_all(&out_dir)
         .map_err(ForgeError::io(format!("creating {}", out_dir.display())))?;
 
-    let selected: Vec<&str> = match provider {
+    // `(preset_filename, output_directory_override)` — None means use `out_dir`.
+    let mut selected: Vec<(&str, Option<&Path>)> = match provider {
         "github" => {
-            let mut list = BASE_WORKFLOWS.to_vec();
-            if deploy {
-                list.push(DEPLOY_WORKFLOW);
+            let mut list: Vec<(&str, Option<&Path>)> =
+                BASE_WORKFLOWS.iter().map(|n| (*n, None)).collect();
+            if opts.deploy {
+                list.push((DEPLOY_WORKFLOW, None));
+            }
+            if opts.security_scan {
+                list.push((SECURITY_SCAN_WORKFLOW, None));
+                // deny.toml goes at the project root, not in .github/workflows.
+                list.push((DENY_TOML, Some(dir)));
+            }
+            if opts.healthcheck {
+                list.push((HEALTHCHECK_WORKFLOW, None));
             }
             list
         }
-        "gitlab" => vec![".gitlab-ci.yml"],
+        "gitlab" => vec![(".gitlab-ci.yml", None)],
+        "circleci" => vec![("config.yml", None)],
         _ => {
             return Err(ForgeError::InvalidArgument(format!(
                 "unknown provider `{provider}` (available: {})",
@@ -117,7 +147,7 @@ pub fn generate(
     };
 
     let mut written = Vec::new();
-    for name in selected {
+    for (name, dest_dir_override) in selected.drain(..) {
         let file = provider_dir
             .get_file(format!("{provider}/{name}"))
             .ok_or_else(|| {
@@ -127,13 +157,18 @@ pub fn generate(
             .contents_utf8()
             .ok_or_else(|| ForgeError::Template(format!("preset {name} is not UTF-8")))?;
 
-        let out_path = out_dir.join(name);
+        let dest_dir = dest_dir_override.unwrap_or(&out_dir);
+        let out_path = dest_dir.join(name);
         if out_path.exists() && !force {
             return Err(ForgeError::AlreadyExists(out_path));
         }
         std::fs::write(&out_path, render_str(contents, &vars))
             .map_err(ForgeError::io(format!("writing {}", out_path.display())))?;
-        let rel_path = if out_rel == "." {
+
+        let rel_path = if dest_dir_override.is_some() {
+            // File written at the project root — use just the filename.
+            name.to_string()
+        } else if out_rel == "." {
             name.to_string()
         } else {
             format!("{out_rel}/{name}")
@@ -148,13 +183,13 @@ pub fn format_report(
     provider: &str,
     name: &str,
     written: &[impl AsRef<str>],
-    deploy: bool,
+    opts: &GenerateOptions,
 ) -> String {
     let mut out = format!("wrote {provider} workflows for `{name}`:\n");
     for path in written {
         out.push_str(&format!("  {}\n", path.as_ref()));
     }
-    if deploy {
+    if opts.deploy {
         let secret_kind = if provider == "gitlab" {
             "GitLab CI/CD variable"
         } else {
@@ -171,6 +206,18 @@ pub fn format_report(
              {secret_location}"
         ));
     }
+    if opts.security_scan {
+        out.push_str(
+            "\nsecurity-scan: review deny.toml at the project root to tune license and\n\
+             vulnerability policies. Install locally with: cargo install cargo-audit cargo-deny\n",
+        );
+    }
+    if opts.healthcheck {
+        out.push_str(
+            "\ntestnet-healthcheck: the smoke entry point defaults to `version` then `ping`.\n\
+             Edit testnet-healthcheck.yml to invoke your contract's real health method.\n",
+        );
+    }
     out
 }
 
@@ -184,18 +231,30 @@ impl ForgePlugin for CiPresetsPlugin {
 
     fn command(&self) -> Command {
         Command::new("ci-init")
-            .about("Write CI/CD workflows (build+test, contract-size, optional testnet deploy)")
+            .about("Write CI/CD workflows (build+test, contract-size, optional testnet deploy, security scan, testnet health-check)")
             .arg(
                 Arg::new("provider")
                     .long("provider")
                     .default_value("github")
-                    .help("CI provider (`github` or `gitlab`)"),
+                    .help("CI provider (`github`, `gitlab`, or `circleci`)"),
             )
             .arg(
                 Arg::new("deploy")
                     .long("deploy")
                     .action(ArgAction::SetTrue)
-                    .help("Also write the manual testnet-deploy workflow"),
+                    .help("Also write the manual testnet-deploy workflow (GitHub only)"),
+            )
+            .arg(
+                Arg::new("security-scan")
+                    .long("security-scan")
+                    .action(ArgAction::SetTrue)
+                    .help("Also write the security-scan workflow (cargo audit + cargo deny) and scaffold deny.toml (GitHub only)"),
+            )
+            .arg(
+                Arg::new("healthcheck")
+                    .long("healthcheck")
+                    .action(ArgAction::SetTrue)
+                    .help("Also write the scheduled testnet health-check workflow (GitHub only)"),
             )
             .arg(
                 Arg::new("path")
@@ -217,20 +276,26 @@ impl ForgePlugin for CiPresetsPlugin {
             .map(|p| ctx.cwd.join(p))
             .unwrap_or_else(|| ctx.cwd.clone());
         let name = project_name(&dir, ctx);
-        let deploy = matches.get_flag("deploy");
+        let opts = GenerateOptions {
+            deploy: matches.get_flag("deploy"),
+            security_scan: matches.get_flag("security-scan"),
+            healthcheck: matches.get_flag("healthcheck"),
+        };
 
-        let written = generate(&dir, provider, &name, deploy, matches.get_flag("force"))?;
+        let written = generate(&dir, provider, &name, &opts, matches.get_flag("force"))?;
 
         if ctx.json {
             let report = serde_json::json!({
                 "provider": provider,
                 "project_name": name,
                 "written_files": written,
-                "deploy_enabled": deploy
+                "deploy_enabled": opts.deploy,
+                "security_scan_enabled": opts.security_scan,
+                "healthcheck_enabled": opts.healthcheck,
             });
             println!("{}", serde_json::to_string_pretty(&report).unwrap());
         } else if !ctx.quiet {
-            print!("{}", format_report(provider, &name, &written, deploy));
+            print!("{}", format_report(provider, &name, &written, &opts));
         }
         Ok(())
     }
@@ -240,14 +305,25 @@ impl ForgePlugin for CiPresetsPlugin {
 mod tests {
     use super::*;
 
+    fn base_opts() -> GenerateOptions {
+        GenerateOptions::default()
+    }
+
+    fn deploy_opts() -> GenerateOptions {
+        GenerateOptions { deploy: true, ..Default::default() }
+    }
+
     #[test]
-    fn available_providers_includes_github_and_gitlab() {
-        assert_eq!(available_providers(), vec!["github", "gitlab"]);
+    fn available_providers_includes_github_gitlab_circleci() {
+        let providers = available_providers();
+        assert!(providers.contains(&"github"));
+        assert!(providers.contains(&"gitlab"));
+        assert!(providers.contains(&"circleci"));
     }
 
     #[test]
     fn report_lists_provider_project_and_files() {
-        let report = format_report("github", "demo", &["a.yml", "b.yml"], false);
+        let report = format_report("github", "demo", &["a.yml", "b.yml"], &base_opts());
         assert_eq!(
             report,
             "wrote github workflows for `demo`:\n  a.yml\n  b.yml\n"
@@ -256,28 +332,29 @@ mod tests {
 
     #[test]
     fn deploy_report_explains_required_secret() {
-        let report = format_report("github", "demo", &["deploy.yml"], true);
+        let report = format_report("github", "demo", &["deploy.yml"], &deploy_opts());
         assert!(report.contains("STELLAR_DEPLOYER_SECRET"));
         assert!(report.contains("Settings → Secrets and variables → Actions"));
     }
 
     #[test]
     fn base_report_omits_deploy_guidance() {
-        let report = format_report("github", "demo", &["build.yml"], false);
+        let report = format_report("github", "demo", &["build.yml"], &base_opts());
         assert!(!report.contains("STELLAR_DEPLOYER_SECRET"));
     }
 
     #[test]
     fn unknown_provider_error_lists_available() {
         let dir = tempfile::tempdir().unwrap();
-        let err = generate(dir.path(), "unknown", "demo", false, false).unwrap_err();
-        assert!(err.to_string().contains("github, gitlab"));
+        let err = generate(dir.path(), "unknown", "demo", &base_opts(), false).unwrap_err();
+        assert!(err.to_string().contains("github"));
+        assert!(err.to_string().contains("gitlab"));
     }
 
     #[test]
     fn writes_base_workflows() {
         let dir = tempfile::tempdir().unwrap();
-        let written = generate(dir.path(), "github", "demo", false, false).unwrap();
+        let written = generate(dir.path(), "github", "demo", &base_opts(), false).unwrap();
         assert_eq!(
             written,
             vec![
@@ -298,7 +375,7 @@ mod tests {
     #[test]
     fn writes_gitlab_preset() {
         let dir = tempfile::tempdir().unwrap();
-        let written = generate(dir.path(), "gitlab", "demo-gitlab", false, false).unwrap();
+        let written = generate(dir.path(), "gitlab", "demo-gitlab", &base_opts(), false).unwrap();
         assert_eq!(written, vec![".gitlab-ci.yml"]);
         let contents = std::fs::read_to_string(dir.path().join(".gitlab-ci.yml")).unwrap();
         assert!(contents.contains("CI/CD configuration for demo-gitlab"));
@@ -308,9 +385,22 @@ mod tests {
     }
 
     #[test]
+    fn writes_circleci_preset() {
+        let dir = tempfile::tempdir().unwrap();
+        let written = generate(dir.path(), "circleci", "my-contract", &base_opts(), false).unwrap();
+        assert_eq!(written, vec![".circleci/config.yml"]);
+        let contents = std::fs::read_to_string(dir.path().join(".circleci/config.yml")).unwrap();
+        assert!(contents.contains("my-contract"), "{contents}");
+        assert!(contents.contains("wasm32v1-none"), "{contents}");
+        assert!(contents.contains("my_contract.wasm"), "{contents}");
+        assert!(!contents.contains("{{project_name}}"), "{contents}");
+        assert!(!contents.contains("{{crate_name}}"), "{contents}");
+    }
+
+    #[test]
     fn deploy_workflow_references_secrets_only() {
         let dir = tempfile::tempdir().unwrap();
-        generate(dir.path(), "github", "my-project", true, false).unwrap();
+        generate(dir.path(), "github", "my-project", &deploy_opts(), false).unwrap();
         let deploy =
             std::fs::read_to_string(dir.path().join(".github/workflows/testnet-deploy.yml"))
                 .unwrap();
@@ -324,9 +414,41 @@ mod tests {
     }
 
     #[test]
+    fn security_scan_workflow_and_deny_toml_written() {
+        let dir = tempfile::tempdir().unwrap();
+        let opts = GenerateOptions { security_scan: true, ..Default::default() };
+        let written = generate(dir.path(), "github", "demo", &opts, false).unwrap();
+        assert!(written.iter().any(|p| p.ends_with("security-scan.yml")), "{written:?}");
+        assert!(written.iter().any(|p| p == "deny.toml"), "{written:?}");
+        let scan = std::fs::read_to_string(
+            dir.path().join(".github/workflows/security-scan.yml"),
+        ).unwrap();
+        assert!(scan.contains("cargo audit"), "{scan}");
+        assert!(scan.contains("cargo-deny"), "{scan}");
+        let deny = std::fs::read_to_string(dir.path().join("deny.toml")).unwrap();
+        assert!(deny.contains("[advisories]"), "{deny}");
+        assert!(deny.contains("[licenses]"), "{deny}");
+    }
+
+    #[test]
+    fn healthcheck_workflow_written() {
+        let dir = tempfile::tempdir().unwrap();
+        let opts = GenerateOptions { healthcheck: true, ..Default::default() };
+        let written = generate(dir.path(), "github", "demo", &opts, false).unwrap();
+        assert!(written.iter().any(|p| p.ends_with("testnet-healthcheck.yml")), "{written:?}");
+        let hc = std::fs::read_to_string(
+            dir.path().join(".github/workflows/testnet-healthcheck.yml"),
+        ).unwrap();
+        assert!(hc.contains("cron"), "{hc}");
+        assert!(hc.contains("stellar contract deploy"), "{hc}");
+        assert!(hc.contains("stellar contract invoke"), "{hc}");
+        assert!(!hc.contains("{{project_name}}"), "{hc}");
+    }
+
+    #[test]
     fn contract_size_workflow_compares_base_and_comments() {
         let dir = tempfile::tempdir().unwrap();
-        generate(dir.path(), "github", "demo", false, false).unwrap();
+        generate(dir.path(), "github", "demo", &base_opts(), false).unwrap();
         let size = std::fs::read_to_string(
             dir.path().join(".github/workflows/contract-size.yml"),
         )
@@ -345,14 +467,14 @@ mod tests {
         assert!(size.contains("pull-requests: write"), "{size}");
     }
 
-        #[test]
+    #[test]
     fn refuses_overwrite_without_force() {
         let dir = tempfile::tempdir().unwrap();
-        generate(dir.path(), "github", "demo", false, false).unwrap();
+        generate(dir.path(), "github", "demo", &base_opts(), false).unwrap();
         assert!(matches!(
-            generate(dir.path(), "github", "demo", false, false),
+            generate(dir.path(), "github", "demo", &base_opts(), false),
             Err(ForgeError::AlreadyExists(_))
         ));
-        generate(dir.path(), "github", "demo", false, true).unwrap();
+        generate(dir.path(), "github", "demo", &base_opts(), true).unwrap();
     }
 }

@@ -65,7 +65,10 @@ pub fn available_templates() -> Vec<&'static str> {
 pub fn template_description(name: &str) -> Option<&'static str> {
     match name {
         "amm" => Some("constant-product AMM / liquidity pool (x*y=k, 0.3% fee)"),
+        "atomic-swap" => Some("atomic two-party token swap with dual authorization"),
         "crowdfund" => Some("escrow/deadline crowdfunding contract"),
+        "escrow" => Some("token escrow with approval or timeout-based refund path"),
+        "governance" => Some("DAO governance with weighted voting, quorum, and proposal execution"),
         "hello-world" => Some("minimal greeter contract (recommended starting point)"),
         "multisig" => Some("M-of-N multisig account contract (CustomAccountInterface)"),
         "nft" => Some("NFT (non-fungible token) with per-token metadata and minting"),
@@ -438,6 +441,24 @@ fn render_dir_fs(dir: &Path, source_root: &Path, dest: &Path, vars: &Vars) -> Re
     Ok(())
 }
 
+/// Print the planned file tree for a dry-run without writing anything to disk.
+fn print_dry_run_tree(dir: &Dir<'_>, template_root: &str, project_name: &str) {
+    for entry in dir.dirs() {
+        print_dry_run_tree(entry, template_root, project_name);
+    }
+    for file in dir.files() {
+        let rel = file
+            .path()
+            .strip_prefix(template_root)
+            .expect("embedded file path must start with the template name");
+        let mut rel_str = rel.to_string_lossy().to_string();
+        if let Some(stripped) = rel_str.strip_suffix(".hbs") {
+            rel_str = stripped.to_string();
+        }
+        println!("  {}/{}", project_name, rel_str);
+    }
+}
+
 fn render_dir(dir: &Dir<'_>, template_root: &str, dest: &Path, vars: &Vars) -> Result<()> {
     for entry in dir.dirs() {
         render_dir(entry, template_root, dest, vars)?;
@@ -624,6 +645,12 @@ impl ForgePlugin for ScaffoldPlugin {
                     .value_name("NAME[:TEMPLATE]")
                     .help("A contract to include in the workspace, e.g. `token:token` (repeatable; requires --workspace)"),
             )
+            .arg(
+                Arg::new("dry-run")
+                    .long("dry-run")
+                    .action(ArgAction::SetTrue)
+                    .help("Print the planned file tree without writing anything to disk"),
+            )
     }
 
     fn run(&self, matches: &ArgMatches, ctx: &ForgeContext) -> Result<()> {
@@ -644,6 +671,8 @@ impl ForgePlugin for ScaffoldPlugin {
             .get_one::<String>("name")
             .expect("clap enforces name unless --list-templates");
         validate_project_name(name)?;
+
+        let dry_run = matches.get_flag("dry-run");
 
         let author = matches
             .get_one::<String>("author")
@@ -675,6 +704,20 @@ impl ForgePlugin for ScaffoldPlugin {
                     "--workspace requires at least one --contract NAME[:TEMPLATE]".into(),
                 ));
             }
+
+            if dry_run {
+                println!("dry-run: planned workspace `{name}` at {}", dest.display());
+                println!("  {}/", name);
+                println!("  {}/Cargo.toml", name);
+                println!("  {}/forge.toml", name);
+                for (contract_name, _template) in &specs {
+                    println!("  {}/contracts/{}/Cargo.toml", name, contract_name);
+                    println!("  {}/contracts/{}/src/lib.rs", name, contract_name);
+                    println!("  {}/contracts/{}/src/test.rs", name, contract_name);
+                }
+                return Ok(());
+            }
+
             log::debug!(
                 "scaffolding workspace `{name}` with {} contract(s) into {}",
                 specs.len(),
@@ -711,6 +754,13 @@ impl ForgePlugin for ScaffoldPlugin {
 
         // --from takes precedence over --template: clone a remote repo.
         if let Some(url) = matches.get_one::<String>("from") {
+            if dry_run {
+                println!("dry-run: planned project `{name}` from remote `{url}` at {}", dest.display());
+                println!("  {}/  (contents depend on remote repository)", name);
+                println!("  {}/forge.toml", name);
+                return Ok(());
+            }
+
             log::debug!(
                 "scaffolding `{name}` from remote URL `{url}` into {}",
                 dest.display()
@@ -757,6 +807,16 @@ impl ForgePlugin for ScaffoldPlugin {
             })
             .unwrap_or_else(|| DEFAULT_TEMPLATE.to_string());
 
+        if dry_run {
+            println!("dry-run: planned project `{name}` from template `{template}` at {}", dest.display());
+            // Show planned file tree using the embedded template listing.
+            if let Some(template_dir) = TEMPLATES.get_dir(template.as_str()) {
+                print_dry_run_tree(template_dir, &template, name);
+            }
+            println!("  {}/forge.toml", name);
+            return Ok(());
+        }
+
         log::debug!(
             "scaffolding `{name}` from template `{template}` into {}",
             dest.display()
@@ -802,6 +862,7 @@ mod tests {
         assert_eq!(
             available_templates(),
             vec!["amm", "crowdfund", "hello-world", "multisig", "nft", "staking", "token"]
+            vec!["amm", "atomic-swap", "crowdfund", "escrow", "governance", "hello-world", "multisig", "nft", "token"]
         );
     }
 
@@ -836,6 +897,7 @@ mod tests {
         assert_eq!(
             names,
             vec!["amm", "crowdfund", "hello-world", "multisig", "nft", "staking", "token"]
+            vec!["amm", "atomic-swap", "crowdfund", "escrow", "governance", "hello-world", "multisig", "nft", "token"]
         );
         for entry in &catalog {
             assert!(

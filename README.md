@@ -5,6 +5,7 @@
 `soroban-forge` wraps and complements the official [stellar-cli](https://github.com/stellar/stellar-cli); it never reimplements it. Building and deploying always go through `stellar contract build` / `stellar contract deploy` — forge gets you to that point faster:
 
 - `soroban-forge new` — start from a working, tested contract template
+- `soroban-forge init` — add forge configuration to an existing contract
 - `soroban-forge test-init` — generate fixtures, a smoke test and a snapshot helper for an existing contract
 - `soroban-forge ci-init` — add GitHub Actions workflows (build+test, contract-size check, optional testnet deploy)
 - `soroban-forge doctor` — verify your toolchain and get fix instructions
@@ -55,6 +56,7 @@ Hitting an error? Check the
 | command                          | what it does                                              |
 |----------------------------------|-----------------------------------------------------------|
 | `new <name> --template <t>`      | scaffold a project (`--list-templates` to see options)    |
+| `init [--tests] [--ci]`         | configure an existing contract without creating a crate  |
 | `templates`                      | list the bundled templates with a one-line description    |
 | `test-init`                      | generate `tests/` fixtures + smoke test for a contract    |
 | `ci-init --provider github`      | write CI workflows; `--deploy` adds manual testnet deploy |

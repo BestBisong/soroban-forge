@@ -11,6 +11,9 @@ Global options may appear before or after a subcommand and can be combined.
 ## Commands
 
 - `soroban-forge new <name> --template <t>` — create a contract project.
+- `soroban-forge init [--tests] [--ci]` — add `forge.toml` to an existing
+  contract without replacing project files; optionally add test and CI
+  scaffolding.
 - `soroban-forge templates` — list all bundled contract templates with descriptions.
 - `soroban-forge test-init` — generate a test harness.
 - `soroban-forge ci-init --provider github` — generate CI workflows.

@@ -1015,6 +1015,7 @@ dependencies = [
  "soroban-forge-core",
  "soroban-forge-doctor",
  "soroban-forge-identity",
+ "soroban-forge-init",
  "soroban-forge-scaffold",
  "soroban-forge-templates",
  "soroban-forge-testgen",
@@ -1092,6 +1093,21 @@ dependencies = [
  "stellar-strkey",
  "tempfile",
  "ureq",
+]
+
+[[package]]
+name = "soroban-forge-init"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "log",
+ "serde",
+ "serde_json",
+ "soroban-forge-ci-presets",
+ "soroban-forge-core",
+ "soroban-forge-testgen",
+ "tempfile",
+ "toml",
 ]
 
 [[package]]

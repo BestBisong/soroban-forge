@@ -5,6 +5,8 @@
 - `--quiet`, `-q` — suppress informational command output; errors and exit
   codes are unchanged.
 - `--verbose`, `-v` — enable debug logging.
+- `--log-file <path>` — also write JSON-lines structured logs to a file while
+  preserving normal terminal output.
 
 Global options may appear before or after a subcommand and can be combined.
 

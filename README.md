@@ -65,6 +65,9 @@ Hitting an error? Check the
 | `verify <contract-id>`           | compare a deployed contract's wasm hash with the local release build (exit `1` on mismatch) |
 
 
+Global `--log-file <path>` writes structured JSON-lines diagnostics in addition
+to normal output, which is useful when retaining CI debugging artifacts.
+
 All commands read an optional [`forge.toml`](crates/core/src/config.rs) in the
 project directory (name, authors, default template) — generated projects get
 one automatically.

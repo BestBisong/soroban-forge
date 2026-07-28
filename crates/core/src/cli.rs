@@ -62,6 +62,13 @@ pub fn build_command(plugins: &[Box<dyn ForgePlugin>]) -> Command {
                 .global(true)
                 .action(ArgAction::SetTrue)
                 .help("Auto-confirm all interactive prompts"),
+        )
+        .arg(
+            Arg::new("log-file")
+                .long("log-file")
+                .global(true)
+                .value_name("PATH")
+                .help("Also write structured JSON logs to PATH"),
         );
     for plugin in plugins {
         cmd = cmd.subcommand(plugin.command());
@@ -117,15 +124,8 @@ pub fn run(plugins: Vec<Box<dyn ForgePlugin>>) -> Result<()> {
         return Ok(());
     }
 
-    let level = if matches.get_flag("verbose") {
-        "debug"
-    } else {
-        "info"
-    };
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(level))
-        .format_timestamp(None)
-        .try_init()
-        .ok();
+    let log_file = matches.get_one::<String>("log-file").map(std::path::Path::new);
+    crate::logging::init(matches.get_flag("verbose"), log_file)?;
 
     let is_json = matches.get_flag("json");
     let result = dispatch(&plugins, &matches);

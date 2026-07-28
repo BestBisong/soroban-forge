@@ -38,6 +38,14 @@ pub struct ContractInfo {
     pub events: Vec<EventInfo>,
     /// Whether the contract source contains any `#[contractevent]` attributes.
     pub has_contractevent: bool,
+    /// Whether the contract source contains token address usage patterns that
+    /// suggest it interacts with Stellar Asset Contract (SAC) tokens. When
+    /// `true`, the generated test harness will include `create_token` / `fund`
+    /// fixture helpers and register a SAC instance alongside the contract.
+    pub has_token_deps: bool,
+    /// Token parameter names detected in constructor or contract methods (e.g.
+    /// `token`, `token_a`, `asset`). Used to generate meaningful fixture names.
+    pub token_param_names: Vec<String>,
 }
 
 /// A contract method discovered inside a `#[contractimpl]` block.
@@ -116,6 +124,8 @@ pub fn inspect(dir: &Path) -> Result<ContractInfo> {
     let events = find_events(&source);
     let has_contractevent = has_contractevent(&source);
 
+    let (has_token_deps, token_param_names) = detect_token_usage(&source);
+
     Ok(ContractInfo {
         crate_name: manifest.package.name.replace('-', "_"),
         package_name: manifest.package.name,
@@ -128,6 +138,8 @@ pub fn inspect(dir: &Path) -> Result<ContractInfo> {
         constructor_arg_types,
         events,
         has_contractevent,
+        has_token_deps,
+        token_param_names,
     })
 }
 
@@ -259,6 +271,64 @@ pub fn map_type_to_default(ty: &str) -> String {
     } else {
         "Default::default()".to_string()
     }
+}
+
+/// Detect whether the contract source uses Stellar Asset Contract (SAC) token
+/// patterns. Returns `(has_token_deps, token_param_names)`.
+///
+/// Detection heuristics (any one match triggers `true`):
+/// - Constructor or method parameter with a name containing "token" or "asset"
+///   and a type of `Address` — the classic SAC pass-by-address pattern.
+/// - Source contains `TokenClient` or `StellarAssetClient` imports/usage.
+/// - Source contains `register_stellar_asset_contract_v2` (already set up by
+///   caller code in the same crate).
+/// - Source contains `token::` namespace access (e.g. `token::Client`).
+///
+/// The returned `token_param_names` list collects the detected parameter names
+/// (deduplicated, stable order) for use in fixture generation.
+pub fn detect_token_usage(source: &str) -> (bool, Vec<String>) {
+    let mut param_names: Vec<String> = Vec::new();
+
+    // Fast checks on the raw source.
+    let raw_hit = source.contains("TokenClient")
+        || source.contains("StellarAssetClient")
+        || source.contains("register_stellar_asset_contract_v2")
+        || source.contains("token::Client")
+        || source.contains("token::StellarAssetClient");
+
+    // Walk method/constructor parameters to find Address-typed "token*" / "asset*" names.
+    // Tokenise just enough to extract parameter declarations.
+    let token_keywords = ["token", "asset"];
+
+    // Simple line-by-line scan for `name: Address` patterns where `name`
+    // contains a token keyword.
+    for line in source.lines() {
+        let line = line.trim();
+        // Match patterns like `token: Address`, `token_a: Address`, `asset: Address`.
+        if let Some(colon_idx) = line.find(':') {
+            let name_part = line[..colon_idx].trim();
+            let type_part = line[colon_idx + 1..].trim();
+            // Strip trailing `,` or `)` from type.
+            let type_clean: String = type_part
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '<' || *c == '>')
+                .collect();
+            if type_clean == "Address" || type_clean == "Address>" {
+                // Only the final segment of the name (after any `mut ` prefix).
+                let name = name_part.trim_start_matches("mut ").trim();
+                let lower = name.to_lowercase();
+                if token_keywords.iter().any(|kw| lower.contains(kw)) {
+                    let owned = name.to_string();
+                    if !param_names.contains(&owned) {
+                        param_names.push(owned);
+                    }
+                }
+            }
+        }
+    }
+
+    let has_token_deps = raw_hit || !param_names.is_empty();
+    (has_token_deps, param_names)
 }
 
 /// Find all structs annotated with `#[contract]` (exactly — not

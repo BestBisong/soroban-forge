@@ -415,6 +415,12 @@ impl ForgePlugin for VerifyPlugin {
             .get_one::<String>("contract-id")
             .expect("contract-id is required by clap");
 
+        if ctx.offline {
+            return Err(ForgeError::InvalidArgument(
+                "verify is unavailable in offline mode because it must fetch deployed wasm".into(),
+            ));
+        }
+
         let dir = matches
             .get_one::<String>("path")
             .map(|p| ctx.cwd.join(p))

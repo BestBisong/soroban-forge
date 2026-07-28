@@ -69,6 +69,13 @@ pub fn build_command(plugins: &[Box<dyn ForgePlugin>]) -> Command {
                 .global(true)
                 .value_name("PATH")
                 .help("Also write structured JSON logs to PATH"),
+        )
+        .arg(
+            Arg::new("offline")
+                .long("offline")
+                .global(true)
+                .action(ArgAction::SetTrue)
+                .help("Disable all network access"),
         );
     for plugin in plugins {
         cmd = cmd.subcommand(plugin.command());
@@ -93,6 +100,7 @@ pub fn dispatch(plugins: &[Box<dyn ForgePlugin>], matches: &ArgMatches) -> Resul
     let quiet = matches.get_flag("quiet");
     let json = matches.get_flag("json");
     let yes = matches.get_flag("yes");
+    let offline = matches.get_flag("offline");
     let (name, sub_matches) = matches
         .subcommand()
         .ok_or_else(|| ForgeError::InvalidArgument("a subcommand is required".into()))?;
@@ -101,9 +109,16 @@ pub fn dispatch(plugins: &[Box<dyn ForgePlugin>], matches: &ArgMatches) -> Resul
     if let Some(plugin) = plugins.iter().find(|p| p.name() == name) {
         let cwd =
             std::env::current_dir().map_err(ForgeError::io("determining current directory"))?;
-        let ctx = ForgeContext::with_output(cwd, verbose, quiet, json, yes)?;
+        let ctx = ForgeContext::with_options(cwd, verbose, quiet, json, yes, offline)?;
         log::debug!("dispatching to plugin `{}`", plugin.name());
         return plugin.run(sub_matches, &ctx);
+    }
+
+    // External plugins are outside forge's control and could access the network.
+    if offline {
+        return Err(ForgeError::InvalidArgument(format!(
+            "external subcommand `{name}` is unavailable in offline mode"
+        )));
     }
 
     // Otherwise treat it as an external subcommand.

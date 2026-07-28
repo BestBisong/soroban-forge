@@ -7,6 +7,8 @@
 - `--verbose`, `-v` — enable debug logging.
 - `--log-file <path>` — also write JSON-lines structured logs to a file while
   preserving normal terminal output.
+- `--offline` — prohibit network access. Network-dependent operations fail with
+  a clear message, while `doctor` skips its connectivity probe.
 
 Global options may appear before or after a subcommand and can be combined.
 

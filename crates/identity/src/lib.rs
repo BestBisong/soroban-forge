@@ -197,6 +197,11 @@ impl ForgePlugin for IdentityPlugin {
             }
 
             Some(("fund", sub)) => {
+                if ctx.offline {
+                    return Err(ForgeError::InvalidArgument(
+                        "friendbot funding is unavailable in offline mode".into(),
+                    ));
+                }
                 let name = sub.get_one::<String>("name").unwrap();
                 let store = load_store(&path)?;
 

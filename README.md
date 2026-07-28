@@ -66,7 +66,9 @@ Hitting an error? Check the
 
 
 Global `--log-file <path>` writes structured JSON-lines diagnostics in addition
-to normal output, which is useful when retaining CI debugging artifacts.
+to normal output, which is useful when retaining CI debugging artifacts. Pass
+`--offline` to prohibit remote template clones, connectivity checks, friendbot,
+verification fetches, and any other network-capable operation.
 
 All commands read an optional [`forge.toml`](crates/core/src/config.rs) in the
 project directory (name, authors, default template) — generated projects get

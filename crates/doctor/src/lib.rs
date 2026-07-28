@@ -335,6 +335,11 @@ pub fn release_profile_checks(project_dir: &Path) -> Vec<Check> {
 
 /// Run all environment checks.
 pub fn run_checks() -> Vec<Check> {
+    run_checks_with_network(true)
+}
+
+/// Run environment checks, optionally omitting the RPC connectivity probe.
+pub fn run_checks_with_network(allow_network: bool) -> Vec<Check> {
     let mut checks = Vec::new();
 
     // rustc, with a minimum version.
@@ -470,7 +475,9 @@ pub fn run_checks() -> Vec<Check> {
     });
 
     // Testnet RPC connectivity (issue #46).
-    checks.push(rpc_connectivity_check(TESTNET_RPC_URL));
+    if allow_network {
+        checks.push(rpc_connectivity_check(TESTNET_RPC_URL));
+    }
 
     // git — recommended only.
     checks.push(match capture("git", &["--version"]) {
@@ -693,7 +700,15 @@ impl DoctorPlugin {
     /// Run every check, including the project-local `soroban-sdk` check when
     /// invoked inside a contract project.
     fn gather_checks(&self, ctx: &ForgeContext) -> Vec<Check> {
-        let mut checks = run_checks();
+        let mut checks = run_checks_with_network(!ctx.offline);
+        if ctx.offline {
+            checks.push(Check {
+                name: "testnet RPC",
+                status: Status::Warn,
+                detail: "skipped (--offline)".into(),
+                fix: None,
+            });
+        }
         if let Some(check) = sdk_version_check(&ctx.cwd) {
             checks.push(check);
         }
@@ -775,6 +790,13 @@ impl ForgePlugin for DoctorPlugin {
         let use_json = ctx.json || matches.get_flag("json");
         let do_fix = matches.get_flag("fix");
         let assume_yes = ctx.yes || matches.get_flag("yes");
+
+        if ctx.offline && do_fix {
+            return Err(ForgeError::InvalidArgument(
+                "doctor --fix is unavailable in offline mode because remedies may download tools"
+                    .into(),
+            ));
+        }
 
         let mut checks = self.gather_checks(ctx);
 

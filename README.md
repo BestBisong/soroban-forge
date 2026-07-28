@@ -105,6 +105,16 @@ up an issue — [ISSUES.md](ISSUES.md) lists well-scoped starter work.
 
 `soroban-forge doctor` checks all of this for you.
 
+## Privacy
+
+`soroban-forge` collects **no telemetry**: no usage analytics, crash reports,
+identifiers, command arguments, or project contents are sent to the maintainers
+or an analytics provider. Network requests made for explicitly requested
+features are not telemetry and can be disabled with `--offline`. Any future
+telemetry must be explicitly opt-in, disabled by default, fully documented, and
+revocable; upgrades will never silently enable it. See [Privacy and
+Telemetry](docs/privacy.md).
+
 ## Exit codes
 
 `soroban-forge` uses a small set of stable exit codes (`0` success, `1`

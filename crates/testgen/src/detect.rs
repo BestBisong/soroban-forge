@@ -46,6 +46,11 @@ pub struct ContractInfo {
     /// Token parameter names detected in constructor or contract methods (e.g.
     /// `token`, `token_a`, `asset`). Used to generate meaningful fixture names.
     pub token_param_names: Vec<String>,
+    /// The contract's initialize-style entrypoint, when it has one. Drives the
+    /// generated "initializes only once" test, which asserts a second call is
+    /// rejected. `None` for contracts that initialize via `__constructor`
+    /// (which the host can only invoke at registration) or not at all.
+    pub init_method: Option<MethodInfo>,
 }
 
 /// A contract method discovered inside a `#[contractimpl]` block.
@@ -125,6 +130,7 @@ pub fn inspect(dir: &Path) -> Result<ContractInfo> {
     let has_contractevent = has_contractevent(&source);
 
     let (has_token_deps, token_param_names) = detect_token_usage(&source);
+    let init_method = detect_init_method(&methods);
 
     Ok(ContractInfo {
         crate_name: manifest.package.name.replace('-', "_"),
@@ -140,7 +146,25 @@ pub fn inspect(dir: &Path) -> Result<ContractInfo> {
         has_contractevent,
         has_token_deps,
         token_param_names,
+        init_method,
     })
+}
+
+/// Entrypoint names that conventionally perform one-time setup, most specific
+/// first — the order is the tie-breaker when a contract exposes several.
+pub const INIT_METHOD_NAMES: &[&str] = &["initialize", "initialise", "init", "setup"];
+
+/// Find the contract's initialize-style entrypoint, if it has one.
+///
+/// Matching is on the method name only: [`MethodInfo`] carries no return type,
+/// so there is no way to tell a `Result`-returning init from a panicking one —
+/// which is why the generated test asserts via `try_*` rather than
+/// `#[should_panic]` with a specific message.
+pub fn detect_init_method(methods: &[MethodInfo]) -> Option<MethodInfo> {
+    INIT_METHOD_NAMES
+        .iter()
+        .find_map(|candidate| methods.iter().find(|m| m.name == *candidate))
+        .cloned()
 }
 
 /// Parse `__constructor` arguments from the source code and generate sensible default values.
@@ -473,10 +497,7 @@ pub fn find_methods(source: &str) -> (Vec<MethodInfo>, Option<Vec<(String, Strin
                     j += 1;
                 }
 
-                if expecting_type
-                    && arg_name != "env"
-                    && arg_name != "Env"
-                    && !arg_name.is_empty()
+                if expecting_type && arg_name != "env" && arg_name != "Env" && !arg_name.is_empty()
                 {
                     args.push((arg_name.clone(), current_type.trim().to_string()));
                 }
@@ -973,5 +994,88 @@ impl Contract {
         assert_eq!(events[0].method, "close");
         assert_eq!(events[0].topics, vec!["(symbol_short!(\"close\"),)"]);
         assert_eq!(events[0].data, Some("()".to_string()));
+    }
+
+    // ── initialize-style entrypoint detection ─────────────────────────────
+
+    fn methods(names: &[&str]) -> Vec<MethodInfo> {
+        names
+            .iter()
+            .map(|n| MethodInfo {
+                name: (*n).to_string(),
+                args: vec![],
+            })
+            .collect()
+    }
+
+    #[test]
+    fn detects_every_init_style_name() {
+        for name in INIT_METHOD_NAMES {
+            let found = detect_init_method(&methods(&["balance", name, "transfer"]));
+            assert_eq!(found.map(|m| m.name).as_deref(), Some(*name));
+        }
+    }
+
+    #[test]
+    fn prefers_initialize_over_shorter_aliases() {
+        let found = detect_init_method(&methods(&["setup", "init", "initialize"]));
+        assert_eq!(found.map(|m| m.name).as_deref(), Some("initialize"));
+    }
+
+    #[test]
+    fn no_init_method_for_contracts_without_one() {
+        assert!(detect_init_method(&methods(&["hello", "transfer"])).is_none());
+    }
+
+    #[test]
+    fn init_lookalikes_are_not_matched() {
+        // Only exact names count — `initialized` is a getter, not the setup call.
+        assert!(detect_init_method(&methods(&["initialized", "reinit"])).is_none());
+    }
+
+    #[test]
+    fn init_method_carries_its_arguments() {
+        let found = detect_init_method(&[MethodInfo {
+            name: "initialize".into(),
+            args: vec![("admin".into(), "Address".into())],
+        }])
+        .unwrap();
+        assert_eq!(
+            found.args,
+            vec![("admin".to_string(), "Address".to_string())]
+        );
+    }
+
+    #[test]
+    fn inspect_surfaces_the_init_method() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname = \"demo\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(
+            dir.path().join("src/lib.rs"),
+            r#"
+#[contract]
+pub struct Demo;
+
+#[contractimpl]
+impl Demo {
+    pub fn initialize(env: Env, admin: Address) {}
+    pub fn get(env: Env) -> u32 { 0 }
+}
+"#,
+        )
+        .unwrap();
+
+        let info = inspect(dir.path()).unwrap();
+        let init = info.init_method.expect("initialize should be detected");
+        assert_eq!(init.name, "initialize");
+        assert_eq!(
+            init.args,
+            vec![("admin".to_string(), "Address".to_string())]
+        );
     }
 }

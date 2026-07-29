@@ -52,6 +52,10 @@ impl VestingContract {
     ) {
         admin.require_auth();
 
+        if env.storage().instance().has(&DataKey::Admin) {
+            panic!("already initialized");
+        }
+
         if total_amount <= 0 {
             panic!("total amount must be positive");
         }

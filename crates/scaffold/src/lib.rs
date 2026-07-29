@@ -760,6 +760,13 @@ impl ForgePlugin for ScaffoldPlugin {
                 return Ok(());
             }
 
+            if ctx.offline {
+                return Err(ForgeError::InvalidArgument(
+                    "remote templates are unavailable in offline mode; use a bundled --template"
+                        .into(),
+                ));
+            }
+
             log::debug!(
                 "scaffolding `{name}` from remote URL `{url}` into {}",
                 dest.display()

@@ -22,6 +22,7 @@
 - [CLI Reference](cli-reference.md)
   - [Exit Codes](exit-codes.md)
   - [Quiet Mode](quiet-mode.md)
+  - [Privacy and Telemetry](privacy.md)
 - [SDK Upgrades & Migrations](upgrade-guide.md)
   - [Contract WASM Upgrades](upgrades.md)
 - [DX & Developer Tooling](tooling.md)

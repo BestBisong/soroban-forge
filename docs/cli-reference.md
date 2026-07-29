@@ -5,12 +5,19 @@
 - `--quiet`, `-q` — suppress informational command output; errors and exit
   codes are unchanged.
 - `--verbose`, `-v` — enable debug logging.
+- `--log-file <path>` — also write JSON-lines structured logs to a file while
+  preserving normal terminal output.
+- `--offline` — prohibit network access. Network-dependent operations fail with
+  a clear message, while `doctor` skips its connectivity probe.
 
 Global options may appear before or after a subcommand and can be combined.
 
 ## Commands
 
 - `soroban-forge new <name> --template <t>` — create a contract project.
+- `soroban-forge init [--tests] [--ci]` — add `forge.toml` to an existing
+  contract without replacing project files; optionally add test and CI
+  scaffolding.
 - `soroban-forge templates` — list all bundled contract templates with descriptions.
 - `soroban-forge test-init` — generate a test harness.
 - `soroban-forge ci-init --provider github` — generate CI workflows.

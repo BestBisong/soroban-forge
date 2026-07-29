@@ -24,6 +24,8 @@ pub struct ForgeContext {
     pub json: bool,
     /// Whether interactive confirmations should be auto-accepted (`--yes`).
     pub yes: bool,
+    /// Whether all network-capable operations are disabled (`--offline`).
+    pub offline: bool,
 }
 
 impl ForgeContext {
@@ -33,7 +35,25 @@ impl ForgeContext {
     }
 
     /// Build a context with explicit output controls.
-    pub fn with_output(cwd: PathBuf, verbose: bool, quiet: bool, json: bool, yes: bool) -> Result<Self> {
+    pub fn with_output(
+        cwd: PathBuf,
+        verbose: bool,
+        quiet: bool,
+        json: bool,
+        yes: bool,
+    ) -> Result<Self> {
+        Self::with_options(cwd, verbose, quiet, json, yes, false)
+    }
+
+    /// Build a context with all global invocation controls.
+    pub fn with_options(
+        cwd: PathBuf,
+        verbose: bool,
+        quiet: bool,
+        json: bool,
+        yes: bool,
+        offline: bool,
+    ) -> Result<Self> {
         let config = ForgeConfig::load_from(&cwd)?;
         Ok(Self {
             cwd,
@@ -42,6 +62,7 @@ impl ForgeContext {
             quiet,
             json,
             yes,
+            offline,
         })
     }
 }

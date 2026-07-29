@@ -5,6 +5,7 @@
 `soroban-forge` wraps and complements the official [stellar-cli](https://github.com/stellar/stellar-cli); it never reimplements it. Building and deploying always go through `stellar contract build` / `stellar contract deploy` — forge gets you to that point faster:
 
 - `soroban-forge new` — start from a working, tested contract template
+- `soroban-forge init` — add forge configuration to an existing contract
 - `soroban-forge test-init` — generate fixtures, a smoke test and a snapshot helper for an existing contract
 - `soroban-forge ci-init` — add GitHub Actions workflows (build+test, contract-size check, optional testnet deploy)
 - `soroban-forge doctor` — verify your toolchain and get fix instructions
@@ -55,6 +56,7 @@ Hitting an error? Check the
 | command                          | what it does                                              |
 |----------------------------------|-----------------------------------------------------------|
 | `new <name> --template <t>`      | scaffold a project (`--list-templates` to see options)    |
+| `init [--tests] [--ci]`         | configure an existing contract without creating a crate  |
 | `templates`                      | list the bundled templates with a one-line description    |
 | `test-init`                      | generate `tests/` fixtures + smoke test for a contract    |
 | `ci-init --provider github`      | write CI workflows; `--deploy` adds manual testnet deploy |
@@ -62,6 +64,11 @@ Hitting an error? Check the
 | `bindings ts`                    | generate a TypeScript client package from a built contract wasm |
 | `verify <contract-id>`           | compare a deployed contract's wasm hash with the local release build (exit `1` on mismatch) |
 
+
+Global `--log-file <path>` writes structured JSON-lines diagnostics in addition
+to normal output, which is useful when retaining CI debugging artifacts. Pass
+`--offline` to prohibit remote template clones, connectivity checks, friendbot,
+verification fetches, and any other network-capable operation.
 
 All commands read an optional [`forge.toml`](crates/core/src/config.rs) in the
 project directory (name, authors, default template) — generated projects get
@@ -97,6 +104,16 @@ up an issue — [ISSUES.md](ISSUES.md) lists well-scoped starter work.
 - Generated contracts use [soroban-sdk](https://crates.io/crates/soroban-sdk) 26.x
 
 `soroban-forge doctor` checks all of this for you.
+
+## Privacy
+
+`soroban-forge` collects **no telemetry**: no usage analytics, crash reports,
+identifiers, command arguments, or project contents are sent to the maintainers
+or an analytics provider. Network requests made for explicitly requested
+features are not telemetry and can be disabled with `--offline`. Any future
+telemetry must be explicitly opt-in, disabled by default, fully documented, and
+revocable; upgrades will never silently enable it. See [Privacy and
+Telemetry](docs/privacy.md).
 
 ## Exit codes
 

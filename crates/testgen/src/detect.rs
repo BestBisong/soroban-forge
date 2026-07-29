@@ -46,6 +46,10 @@ pub struct ContractInfo {
     /// Token parameter names detected in constructor or contract methods (e.g.
     /// `token`, `token_a`, `asset`). Used to generate meaningful fixture names.
     pub token_param_names: Vec<String>,
+    /// Whether the contract reads or writes persistent storage
+    /// (`env.storage().persistent()`). When `true`, a TTL / rent-extension
+    /// test file is generated so rent regressions have a starting point.
+    pub has_persistent_storage: bool,
 }
 
 /// A contract method discovered inside a `#[contractimpl]` block.
@@ -140,7 +144,17 @@ pub fn inspect(dir: &Path) -> Result<ContractInfo> {
         has_contractevent,
         has_token_deps,
         token_param_names,
+        has_persistent_storage: detect_persistent_storage(&source),
     })
+}
+
+/// True when the source touches persistent storage, e.g.
+/// `env.storage().persistent().get(&key)`. Whitespace is stripped first so
+/// rustfmt's method-chain wrapping (`.storage()\n    .persistent()`) still
+/// matches.
+pub fn detect_persistent_storage(source: &str) -> bool {
+    let compact: String = source.chars().filter(|c| !c.is_whitespace()).collect();
+    compact.contains("storage().persistent()")
 }
 
 /// Parse `__constructor` arguments from the source code and generate sensible default values.
@@ -973,5 +987,27 @@ impl Contract {
         assert_eq!(events[0].method, "close");
         assert_eq!(events[0].topics, vec!["(symbol_short!(\"close\"),)"]);
         assert_eq!(events[0].data, Some("()".to_string()));
+    }
+
+    #[test]
+    fn detects_persistent_storage_usage() {
+        assert!(detect_persistent_storage(
+            "env.storage().persistent().set(&key, &value);"
+        ));
+        // rustfmt wraps long method chains across lines.
+        assert!(detect_persistent_storage(
+            "env.storage()\n        .persistent()\n        .extend_ttl(&key, 100, 200);"
+        ));
+    }
+
+    #[test]
+    fn ignores_instance_and_temporary_only_storage() {
+        assert!(!detect_persistent_storage(
+            "env.storage().instance().set(&key, &value);"
+        ));
+        assert!(!detect_persistent_storage(
+            "env.storage().temporary().extend_ttl(&key, 10, 10);"
+        ));
+        assert!(!detect_persistent_storage("pub fn greet(env: Env) -> u32 { 42 }"));
     }
 }

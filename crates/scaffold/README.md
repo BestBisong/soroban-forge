@@ -27,11 +27,42 @@ know the project name/author.
 ## Template format
 
 - File contents and file *names* may use `{{variable}}` placeholders.
-  Available variables: `project_name`, `crate_name` (snake_case),
-  `author`, `sdk_version`.
+  Built-in variables: `project_name`, `crate_name` (snake_case), `author`,
+  `sdk_version`, `edition`.
 - A trailing `.hbs` in a file name is stripped on render. Ship manifests as
   `Cargo.toml.hbs` so cargo does not treat template dirs as packages.
 - Unknown placeholders are left verbatim (see core's `render.rs`).
+
+### Custom variables (`template.toml`)
+
+A template may declare further variables in a `template.toml` at its root. The
+file drives generation and is never copied into the generated project.
+
+```toml
+description = "a token with a configurable symbol"
+
+[[variables]]
+name = "token_symbol"
+prompt = "Token symbol"
+default = "TKN"
+
+[[variables]]
+name = "admin_address"
+prompt = "Admin account (G...)"
+required = true          # the default; set false to allow an empty value
+```
+
+Each variable is resolved from, in order:
+
+1. `--var name=value` on the command line (repeatable).
+2. An interactive prompt, when stdin and stdout are both a terminal and neither
+   `--yes` nor `--json` was passed. Pressing enter accepts the default.
+3. The `default` from the manifest.
+
+A `required` variable with nothing left to fall back on is an error naming the
+flag that would have supplied it — so CI and scripted runs fail fast instead of
+blocking on a prompt. The five built-in variables above are derived by
+soroban-forge and are rejected both in a manifest and on `--var`.
 
 ## Adding a template
 
@@ -45,10 +76,19 @@ know the project name/author.
 
 ```rust
 scaffold::generate(template, dest, &vars, force) -> Result<()>;
+scaffold::generate_from_url(url, dest, &vars, force) -> Result<()>;
+scaffold::generate_from_url_with(url, dest, &vars, force, &mut resolve) -> Result<()>;
 scaffold::available_templates() -> Vec<&'static str>;
-scaffold::project_vars(name, author) -> Vars;
+scaffold::project_vars(name, author, edition) -> Vars;
+scaffold::bundled_manifest(template) -> Result<Option<TemplateManifest>>;
+scaffold::manifest_in_dir(dir) -> Result<Option<TemplateManifest>>;
+scaffold::manifest::resolve_variables(&manifest, &supplied, &mut prompter) -> Result<Vars>;
 scaffold::SOROBAN_SDK_VERSION;
 ```
+
+`generate*` refuse to write into an existing directory unless `force` is set.
+The confirmation the CLI shows before a forced overwrite lives in the plugin,
+not in these functions — a programmatic caller that passes `force` means it.
 
 ## Tests
 

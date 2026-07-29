@@ -1,0 +1,23 @@
+[package]
+name = "soroban-forge-identity"
+description = "Test identity (keypair) management for soroban-forge"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+soroban-forge-core.workspace = true
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+log.workspace = true
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+stellar-strkey = "0.0.13"
+rand = "0.8"
+dirs = "6"
+ureq = "2"
+
+[dev-dependencies]
+tempfile.workspace = true

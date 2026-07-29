@@ -1,0 +1,50 @@
+# Path -> module label map for actions/labeler (see .github/workflows/labeler.yml).
+#
+# Mirrors the module ownership map in CONTRIBUTING.md. When a module gains or
+# moves a path, update both this file and that table so they stay in sync.
+
+# Module 1 - CLI core & command framework
+"module:core":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "crates/core/**"
+          - "src/main.rs"
+
+# Module 2 - Project scaffolding & templates.
+# crates/templates is the `templates` listing subcommand: a presentation layer
+# over scaffold's template catalog, so it belongs to the scaffold module.
+"module:scaffold":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "crates/scaffold/**"
+          - "crates/templates/**"
+          - "templates/**"
+
+# Module 3 - Test harness generator
+"module:testgen":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "crates/testgen/**"
+
+# Module 4 - CI/CD & DevOps presets
+"module:ci":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "crates/ci-presets/**"
+          - "presets/**"
+
+# Module 5 - Docs, examples & DX
+"module:dx":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "crates/doctor/**"
+          - "docs/**"
+          - "examples/**"
+
+# Module 6 - TypeScript bindings generator.
+# Directory is crates/binding-ts; the crate it publishes is
+# soroban-forge-bindings-ts.
+"module:bindings":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "crates/binding-ts/**"

@@ -14,11 +14,13 @@
 
 pub mod cli;
 pub mod config;
+pub mod config_cmd;
 pub mod error;
 pub mod plugin;
 pub mod render; // template renderer
 
 pub use cli::run;
 pub use config::ForgeConfig;
+pub use config_cmd::ConfigPlugin;
 pub use error::{ForgeError, Result};
 pub use plugin::{ForgeContext, ForgePlugin};

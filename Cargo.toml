@@ -19,9 +19,13 @@ soroban-forge-ci-presets = { path = "crates/ci-presets" }
 soroban-forge-doctor = { path = "crates/doctor" }
 soroban-forge-bindings-ts = { path = "crates/binding-ts" }
 soroban-forge-templates = { path = "crates/templates" }
+soroban-forge-verify = { path = "crates/verify" }
+soroban-forge-identity = { path = "crates/identity" }
+clap_complete.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+serde_json.workspace = true
 
 [workspace]
 members = ["crates/*"]
@@ -37,11 +41,15 @@ rust-version = "1.84"
 
 [workspace.dependencies]
 soroban-forge-core = { path = "crates/core" }
+soroban-forge-scaffold = { path = "crates/scaffold" }
 clap = "4.5"
+clap_complete = "4.5"
 thiserror = "2.0"
 serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 toml = "0.9"
 log = "0.4"
 env_logger = "0.11"
 include_dir = "0.7"
 tempfile = "3"
+sha2 = "0.10"

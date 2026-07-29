@@ -14,4 +14,8 @@ Global options may appear before or after a subcommand and can be combined.
 - `soroban-forge templates` — list all bundled contract templates with descriptions.
 - `soroban-forge test-init` — generate a test harness.
 - `soroban-forge ci-init --provider github` — generate CI workflows.
-- `soroban-forge doctor` — check the local Soroban toolchain.
+- `soroban-forge doctor [--json]` — check the local Soroban toolchain (optionally emitting machine-readable JSON).
+- `soroban-forge bindings ts` — generate a TypeScript client package from the built contract wasm.
+- `soroban-forge verify <contract-id> [--network <n>]` — compare a deployed
+  contract's wasm hash with the local release build; exits `1` on a mismatch.
+  See [Contract Verification](contract-verification.md).

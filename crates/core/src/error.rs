@@ -12,7 +12,7 @@ pub type Result<T> = std::result::Result<T, ForgeError>; // common Result alias
 /// | code | meaning        | when                                                              |
 /// |------|----------------|--------------------------------------------------------------------|
 /// | 0    | success        | the subcommand completed without error                             |
-/// | 1    | user error     | bad arguments, invalid config/template, output path exists without `--force` |
+/// | 1    | user error     | bad arguments, invalid config/template, output path exists without `--force`, a `verify` hash mismatch |
 /// | 2    | tool missing   | a required external tool is missing or fails its version check     |
 /// | 3    | internal error | an I/O failure, or anything not classified above                   |
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -48,6 +48,13 @@ pub enum ForgeError {
     #[error("environment check failed: {0}")]
     Doctor(String),
 
+    /// A verification ran to completion and the answer was "no" — e.g.
+    /// `verify` found the deployed wasm differs from the local build.
+    /// Nothing went wrong mechanically, so this is not an internal error;
+    /// it exits `1` like the other "your input doesn't check out" cases.
+    #[error("verification failed: {0}")]
+    VerificationFailed(String),
+
     /// A required external tool (e.g. `stellar`, `rustc`, `rustup`) was not
     /// found on `PATH`, or failed its minimum-version check. Distinct from
     /// [`ForgeError::Doctor`] so a plugin that shells out to a specific tool
@@ -81,7 +88,8 @@ impl ForgeError {
             ForgeError::Config { .. }
             | ForgeError::Template(_)
             | ForgeError::AlreadyExists(_)
-            | ForgeError::InvalidArgument(_) => ExitCode::UserError,
+            | ForgeError::InvalidArgument(_)
+            | ForgeError::VerificationFailed(_) => ExitCode::UserError,
             ForgeError::Doctor(_) | ForgeError::ToolMissing(_) => ExitCode::ToolMissing,
             ForgeError::Io { .. } | ForgeError::Other(_) => ExitCode::InternalError,
         }
@@ -94,24 +102,50 @@ mod tests {
 
     #[test]
     fn user_errors_map_to_exit_code_1() {
-        assert_eq!(ForgeError::InvalidArgument("x".into()).exit_code(), ExitCode::UserError);
-        assert_eq!(ForgeError::AlreadyExists(PathBuf::from("x")).exit_code(), ExitCode::UserError);
-        assert_eq!(ForgeError::Template("x".into()).exit_code(), ExitCode::UserError);
         assert_eq!(
-            ForgeError::Config { path: PathBuf::from("forge.toml"), message: "bad".into() }.exit_code(),
+            ForgeError::InvalidArgument("x".into()).exit_code(),
+            ExitCode::UserError
+        );
+        assert_eq!(
+            ForgeError::AlreadyExists(PathBuf::from("x")).exit_code(),
+            ExitCode::UserError
+        );
+        assert_eq!(
+            ForgeError::Template("x".into()).exit_code(),
+            ExitCode::UserError
+        );
+        assert_eq!(
+            ForgeError::Config {
+                path: PathBuf::from("forge.toml"),
+                message: "bad".into()
+            }
+            .exit_code(),
+            ExitCode::UserError
+        );
+        assert_eq!(
+            ForgeError::VerificationFailed("hash mismatch".into()).exit_code(),
             ExitCode::UserError
         );
     }
 
     #[test]
     fn missing_tool_errors_map_to_exit_code_2() {
-        assert_eq!(ForgeError::Doctor("2 failed".into()).exit_code(), ExitCode::ToolMissing);
-        assert_eq!(ForgeError::ToolMissing("stellar".into()).exit_code(), ExitCode::ToolMissing);
+        assert_eq!(
+            ForgeError::Doctor("2 failed".into()).exit_code(),
+            ExitCode::ToolMissing
+        );
+        assert_eq!(
+            ForgeError::ToolMissing("stellar".into()).exit_code(),
+            ExitCode::ToolMissing
+        );
     }
 
     #[test]
     fn unclassified_errors_map_to_exit_code_3() {
-        assert_eq!(ForgeError::Other("oops".into()).exit_code(), ExitCode::InternalError);
+        assert_eq!(
+            ForgeError::Other("oops".into()).exit_code(),
+            ExitCode::InternalError
+        );
         assert_eq!(
             ForgeError::Io {
                 context: "reading x".into(),

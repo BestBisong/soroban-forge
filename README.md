@@ -9,31 +9,41 @@
 - `soroban-forge ci-init` — add GitHub Actions workflows (build+test, contract-size check, optional testnet deploy)
 - `soroban-forge doctor` — verify your toolchain and get fix instructions
 - `soroban-forge bindings ts` — generate a TypeScript client package from a built contract
+- `soroban-forge verify <contract-id>` — check that a deployed contract matches your local build
 
 ## Quickstart
 
+[![asciinema cast](https://asciinema.org/a/soroban-forge-zero-to-testnet.svg)](https://asciinema.org/a/soroban-forge-zero-to-testnet)
+
+You need Rust ≥ 1.84 ([rustup](https://rustup.rs)) and `git`. The two remaining
+pieces — the `wasm32v1-none` target and `stellar-cli` — are what `doctor --fix`
+installs in step 2.
+
 ```sh
-# 1. install (from source, v0.1)
+# 1. install soroban-forge (from source, v0.1)
 git clone https://github.com/soroban-forge-labs/soroban-forge
-cd soroban-forge && cargo install --path .
+cd soroban-forge && cargo install --path . && cd ..
 
-# 2. check your environment
-soroban-forge doctor
+# 2. install anything missing from your toolchain, then re-check
+#    (--fix prompts before running each install; drop it to only report)
+soroban-forge doctor --fix
 
-# 3. create a project (templates: hello-world, token, crowdfund)
+# 3. create a project (`soroban-forge templates` lists all six)
 soroban-forge new my-token --template token
 cd my-token
 
-# 4. it builds and passes tests out of the box
-cargo test
+# 4. build the deployable wasm -> target/wasm32v1-none/release/my_token.wasm
 stellar contract build
 
-# 5. add a generated test harness and CI
-soroban-forge test-init --force
-soroban-forge ci-init --deploy
+# 5. run the tests — the template passes them out of the box
+cargo test
 ```
 
-new:
+Step 5 should end in `test result: ok. 6 passed; 0 failed`. From here,
+`soroban-forge test-init --force` adds a generated test harness with fixtures
+and a snapshot helper, and `soroban-forge ci-init --deploy` writes GitHub
+Actions workflows for build+test, contract size and manual testnet deploys.
+
 New to Soroban entirely? Follow the full walkthrough:
 [docs/tutorial-zero-to-testnet.md](docs/tutorial-zero-to-testnet.md).
 
@@ -45,10 +55,12 @@ Hitting an error? Check the
 | command                          | what it does                                              |
 |----------------------------------|-----------------------------------------------------------|
 | `new <name> --template <t>`      | scaffold a project (`--list-templates` to see options)    |
+| `templates`                      | list the bundled templates with a one-line description    |
 | `test-init`                      | generate `tests/` fixtures + smoke test for a contract    |
 | `ci-init --provider github`      | write CI workflows; `--deploy` adds manual testnet deploy |
 | `doctor`                         | check rustc/cargo, `wasm32v1-none` target, stellar-cli    |
 | `bindings ts`                    | generate a TypeScript client package from a built contract wasm |
+| `verify <contract-id>`           | compare a deployed contract's wasm hash with the local release build (exit `1` on mismatch) |
 
 
 All commands read an optional [`forge.toml`](crates/core/src/config.rs) in the
@@ -69,6 +81,10 @@ with its own README, tests and a small public surface; they meet only at the
 | 4 — CI/CD presets | [`crates/ci-presets`](crates/ci-presets) + [`presets/`](presets) | `ci-init` |
 | 5 — Docs & DX | [`crates/doctor`](crates/doctor) + [`docs/`](docs) + [`examples/`](examples) | `doctor` |
 | 6 — TypeScript bindings | [`crates/bindings-ts`](crates/bindings-ts) | `bindings ts` |
+| 7 — Deployment verification | [`crates/verify`](crates/verify) | `verify` |
+
+> **Note:** See [`examples/README.md`](examples/README.md) for instructions on
+> regenerating the checked-in example projects.
 
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the ownership map and how to pick
@@ -87,6 +103,10 @@ up an issue — [ISSUES.md](ISSUES.md) lists well-scoped starter work.
 `soroban-forge` uses a small set of stable exit codes (`0` success, `1`
 user error, `2` missing tool, `3` internal error) so CI/scripts can branch
 on outcome — see [docs/exit-codes.md](docs/exit-codes.md).
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for a full history of notable changes and release notes.
 
 ## License
 

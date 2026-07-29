@@ -1,0 +1,21 @@
+[package]
+name = "soroban-forge-verify"
+description = "On-chain wasm hash verification for soroban-forge"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+soroban-forge-core.workspace = true
+clap.workspace = true
+toml.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+log.workspace = true
+sha2.workspace = true
+tempfile.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

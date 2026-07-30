@@ -1017,6 +1017,7 @@ dependencies = [
  "soroban-forge-identity",
  "soroban-forge-init",
  "soroban-forge-scaffold",
+ "soroban-forge-spec",
  "soroban-forge-templates",
  "soroban-forge-testgen",
  "soroban-forge-verify",
@@ -1116,6 +1117,19 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "include_dir",
+ "log",
+ "serde",
+ "serde_json",
+ "soroban-forge-core",
+ "tempfile",
+ "toml",
+]
+
+[[package]]
+name = "soroban-forge-spec"
+version = "0.1.0"
+dependencies = [
+ "clap",
  "log",
  "serde",
  "serde_json",

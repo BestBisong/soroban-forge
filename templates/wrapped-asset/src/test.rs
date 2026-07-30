@@ -1,0 +1,118 @@
+extern crate std;
+
+use super::*;
+use soroban_sdk::testutils::Address as _;
+use soroban_sdk::{token::StellarAssetClient, token::TokenClient, Address, Env};
+
+struct Tok<'a> {
+    address: Address,
+    client: TokenClient<'a>,
+    admin: StellarAssetClient<'a>,
+}
+
+fn make_token(env: &Env) -> Tok<'_> {
+    let issuer = Address::generate(env);
+    let sac = env.register_stellar_asset_contract_v2(issuer);
+    let address = sac.address();
+    Tok {
+        client: TokenClient::new(env, &address),
+        admin: StellarAssetClient::new(env, &address),
+        address,
+    }
+}
+
+fn setup(env: &Env) -> (WrappedAssetContractClient<'_>, Tok<'_>) {
+    env.mock_all_auths();
+
+    let token = make_token(env);
+    let contract_id = env.register(WrappedAssetContract, ());
+    let contract = WrappedAssetContractClient::new(env, &contract_id);
+    contract.initialize(&token.address);
+
+    (contract, token)
+}
+
+#[test]
+fn wrap_mints_1_to_1_and_locks_underlying() {
+    let env = Env::default();
+    let (contract, token) = setup(&env);
+
+    let user = Address::generate(&env);
+    token.admin.mint(&user, &1_000);
+
+    let total = contract.wrap(&user, &400);
+
+    assert_eq!(total, 400);
+    assert_eq!(contract.balance_of(&user), 400);
+    assert_eq!(contract.total_supply(), 400);
+    assert_eq!(token.client.balance(&user), 600);
+    assert_eq!(token.client.balance(&contract.address), 400);
+}
+
+#[test]
+fn unwrap_burns_1_to_1_and_releases_underlying() {
+    let env = Env::default();
+    let (contract, token) = setup(&env);
+
+    let user = Address::generate(&env);
+    token.admin.mint(&user, &1_000);
+    contract.wrap(&user, &400);
+
+    let total = contract.unwrap(&user, &150);
+
+    assert_eq!(total, 250);
+    assert_eq!(contract.balance_of(&user), 250);
+    assert_eq!(contract.total_supply(), 250);
+    assert_eq!(token.client.balance(&user), 750);
+    assert_eq!(token.client.balance(&contract.address), 250);
+}
+
+#[test]
+fn full_wrap_and_unwrap_round_trips_conserve_balance() {
+    let env = Env::default();
+    let (contract, token) = setup(&env);
+
+    let user = Address::generate(&env);
+    token.admin.mint(&user, &1_000);
+
+    contract.wrap(&user, &1_000);
+    assert_eq!(token.client.balance(&user), 0);
+    assert_eq!(contract.total_supply(), 1_000);
+
+    contract.unwrap(&user, &1_000);
+    assert_eq!(token.client.balance(&user), 1_000);
+    assert_eq!(contract.total_supply(), 0);
+    assert_eq!(contract.balance_of(&user), 0);
+    assert_eq!(token.client.balance(&contract.address), 0);
+}
+
+#[test]
+fn total_supply_always_matches_locked_underlying() {
+    let env = Env::default();
+    let (contract, token) = setup(&env);
+
+    let alice = Address::generate(&env);
+    let bob = Address::generate(&env);
+    token.admin.mint(&alice, &1_000);
+    token.admin.mint(&bob, &1_000);
+
+    contract.wrap(&alice, &300);
+    contract.wrap(&bob, &500);
+    contract.unwrap(&alice, &100);
+
+    assert_eq!(contract.total_supply(), 700);
+    assert_eq!(token.client.balance(&contract.address), 700);
+}
+
+#[test]
+#[should_panic(expected = "insufficient wrapper balance")]
+fn unwrap_more_than_balance_fails() {
+    let env = Env::default();
+    let (contract, token) = setup(&env);
+
+    let user = Address::generate(&env);
+    token.admin.mint(&user, &1_000);
+    contract.wrap(&user, &100);
+
+    contract.unwrap(&user, &200);
+}

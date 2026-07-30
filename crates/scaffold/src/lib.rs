@@ -98,6 +98,7 @@ pub fn template_description(name: &str) -> Option<&'static str> {
         "atomic-swap" => Some("atomic two-party token swap with dual authorization"),
         "crowdfund" => Some("escrow/deadline crowdfunding contract"),
         "escrow" => Some("token escrow with approval or timeout-based refund path"),
+        "faucet" => Some("token faucet dispensing a fixed amount per address with a cooldown"),
         "governance" => Some("DAO governance with weighted voting, quorum, and proposal execution"),
         "hello-world" => Some("minimal greeter contract (recommended starting point)"),
         "merkle-airdrop" => Some("one-claim-per-address airdrop verified against a merkle root"),
@@ -107,6 +108,7 @@ pub fn template_description(name: &str) -> Option<&'static str> {
         "subscription" => Some("recurring payment charged once per elapsed interval"),
         "token" => Some("SEP-41 fungible token (soroban_sdk::token::TokenInterface)"),
         "vesting" => Some("token vesting with cliff + linear release schedule"),
+        "wrapped-asset" => Some("mints a wrapper token on deposit and burns it on withdraw 1:1"),
         _ => None,
     }
 }

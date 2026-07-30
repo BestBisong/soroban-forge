@@ -1,0 +1,19 @@
+[package]
+name = "soroban-forge-network"
+description = "Named network config management for soroban-forge"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+soroban-forge-core.workspace = true
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+log.workspace = true
+dirs = "6"
+
+[dev-dependencies]
+tempfile.workspace = true

@@ -16,8 +16,8 @@ pub struct ForgeContext {
     pub cwd: PathBuf,
     /// Parsed `forge.toml` from `cwd`, when present.
     pub config: Option<ForgeConfig>,
-    /// Whether `--verbose` was passed.
-    pub verbose: bool,
+    /// Number of times `-v`/`--verbose` was passed (0 = default, 1 = debug, 2+ = trace).
+    pub verbose: u8,
     /// Whether informational command output should be suppressed.
     pub quiet: bool,
     /// Whether structured JSON should be printed instead of text output.
@@ -30,14 +30,14 @@ pub struct ForgeContext {
 
 impl ForgeContext {
     /// Build a context for `cwd`, loading `forge.toml` if present.
-    pub fn new(cwd: PathBuf, verbose: bool) -> Result<Self> {
+    pub fn new(cwd: PathBuf, verbose: u8) -> Result<Self> {
         Self::with_output(cwd, verbose, false, false, false)
     }
 
     /// Build a context with explicit output controls.
     pub fn with_output(
         cwd: PathBuf,
-        verbose: bool,
+        verbose: u8,
         quiet: bool,
         json: bool,
         yes: bool,
@@ -48,7 +48,7 @@ impl ForgeContext {
     /// Build a context with all global invocation controls.
     pub fn with_options(
         cwd: PathBuf,
-        verbose: bool,
+        verbose: u8,
         quiet: bool,
         json: bool,
         yes: bool,
@@ -91,7 +91,7 @@ mod tests {
     #[test]
     fn context_is_not_quiet_by_default() {
         let dir = tempfile::tempdir().unwrap();
-        let ctx = ForgeContext::new(dir.path().to_path_buf(), false).unwrap();
+        let ctx = ForgeContext::new(dir.path().to_path_buf(), 0).unwrap();
         assert!(!ctx.quiet);
         assert!(!ctx.json);
     }
@@ -99,28 +99,28 @@ mod tests {
     #[test]
     fn context_accepts_explicit_quiet_mode() {
         let dir = tempfile::tempdir().unwrap();
-        let ctx = ForgeContext::with_output(dir.path().to_path_buf(), false, true, false, false).unwrap();
+        let ctx = ForgeContext::with_output(dir.path().to_path_buf(), 0, true, false, false).unwrap();
         assert!(ctx.quiet);
     }
 
     #[test]
     fn context_accepts_explicit_json_mode() {
         let dir = tempfile::tempdir().unwrap();
-        let ctx = ForgeContext::with_output(dir.path().to_path_buf(), false, false, true, false).unwrap();
+        let ctx = ForgeContext::with_output(dir.path().to_path_buf(), 0, false, true, false).unwrap();
         assert!(ctx.json);
     }
 
     #[test]
     fn context_is_not_yes_by_default() {
         let dir = tempfile::tempdir().unwrap();
-        let ctx = ForgeContext::new(dir.path().to_path_buf(), false).unwrap();
+        let ctx = ForgeContext::new(dir.path().to_path_buf(), 0).unwrap();
         assert!(!ctx.yes);
     }
 
     #[test]
     fn context_accepts_explicit_yes_mode() {
         let dir = tempfile::tempdir().unwrap();
-        let ctx = ForgeContext::with_output(dir.path().to_path_buf(), false, false, false, true).unwrap();
+        let ctx = ForgeContext::with_output(dir.path().to_path_buf(), 0, false, false, true).unwrap();
         assert!(ctx.yes);
     }
 }

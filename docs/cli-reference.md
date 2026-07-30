@@ -35,8 +35,25 @@ Global options may appear before or after a subcommand and can be combined.
     `env.cost_estimate().budget()` and asserts an upper bound. Defaults to the
     first detected entrypoint.
 - `soroban-forge ci-init --provider github` — generate CI workflows.
+- `soroban-forge test-init [--layout <tests|inline>]` — generate a test harness.
+  `--layout tests` (default) writes a `tests/` integration-test directory;
+  `--layout inline` writes a single `#[cfg(test)] mod forge_tests` in `src/`.
+  Contracts that use persistent storage also get `forge_ttl.rs`, which
+  exercises `extend_ttl` on a persistent entry.
+- `soroban-forge ci-init --provider <github|gitlab|circleci|bitbucket>` —
+  generate CI workflows. `--matrix` adds a build/test workflow that runs across
+  a Rust toolchain matrix (stable plus `--msrv`, default 1.84).
+- `soroban-forge test-init` — generate a test harness.
+- `soroban-forge ci-init --provider github [--dependabot]` — generate CI
+  workflows (build+test and a rustfmt/clippy lint job); `--dependabot` also
+  writes `.github/dependabot.yml` for weekly cargo and github-actions updates.
 - `soroban-forge doctor [--json]` — check the local Soroban toolchain (optionally emitting machine-readable JSON).
 - `soroban-forge bindings ts` — generate a TypeScript client package from the built contract wasm.
+- `soroban-forge spec [--path <dir>] [--wasm <path>]` — print the built
+  contract's interface: every entrypoint with its argument and return types,
+  plus the types those signatures refer to. Reads the spec out of the wasm, so
+  run `stellar contract build` first; `--json` emits the machine-readable spec.
+  Works under `--offline`.
 - `soroban-forge verify <contract-id> [--network <n>]` — compare a deployed
   contract's wasm hash with the local release build; exits `1` on a mismatch.
   See [Contract Verification](contract-verification.md).

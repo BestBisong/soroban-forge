@@ -333,6 +333,48 @@ pub fn release_profile_checks(project_dir: &Path) -> Vec<Check> {
     checks
 }
 
+/// Run a fast `cargo build --target wasm32v1-none` in `project_dir` and
+/// report whether it succeeds, with timing.
+///
+/// Returns `None` (no report line at all) when `project_dir` does not look
+/// like a cargo project — there is nothing to smoke-build.
+///
+/// Thin system-touching wrapper; not unit-tested beyond the "not a project"
+/// case.
+pub fn wasm_build_check(project_dir: &Path) -> Option<Check> {
+    if !project_dir.join("Cargo.toml").is_file() {
+        return None;
+    }
+
+    let start = std::time::Instant::now();
+    let output = std::process::Command::new("cargo")
+        .args(["build", "--target", "wasm32v1-none"])
+        .current_dir(project_dir)
+        .output();
+    let elapsed_ms = start.elapsed().as_millis();
+
+    Some(match output {
+        Ok(o) if o.status.success() => Check {
+            name: "wasm build",
+            status: Status::Pass,
+            detail: format!("builds to wasm32v1-none ({elapsed_ms} ms)"),
+            fix: None,
+        },
+        Ok(_) => Check {
+            name: "wasm build",
+            status: Status::Fail,
+            detail: format!("cargo build --target wasm32v1-none failed ({elapsed_ms} ms)"),
+            fix: Some("run `cargo build --target wasm32v1-none` directly to see the error"),
+        },
+        Err(_) => Check {
+            name: "wasm build",
+            status: Status::Fail,
+            detail: "could not run cargo".into(),
+            fix: Some("install Rust: https://rustup.rs"),
+        },
+    })
+}
+
 /// Run all environment checks.
 pub fn run_checks() -> Vec<Check> {
     run_checks_with_network(true)
@@ -699,7 +741,11 @@ pub struct DoctorPlugin;
 impl DoctorPlugin {
     /// Run every check, including the project-local `soroban-sdk` check when
     /// invoked inside a contract project.
-    fn gather_checks(&self, ctx: &ForgeContext) -> Vec<Check> {
+    ///
+    /// `do_build` opts into the `cargo build --target wasm32v1-none` smoke
+    /// check (issue #72), which is otherwise skipped since it is much slower
+    /// than the rest of the report.
+    fn gather_checks(&self, ctx: &ForgeContext, do_build: bool) -> Vec<Check> {
         let mut checks = run_checks_with_network(!ctx.offline);
         if ctx.offline {
             checks.push(Check {
@@ -714,6 +760,11 @@ impl DoctorPlugin {
         }
         // Release profile size-optimisation checks (issue #48).
         checks.extend(release_profile_checks(&ctx.cwd));
+        if do_build {
+            if let Some(check) = wasm_build_check(&ctx.cwd) {
+                checks.push(check);
+            }
+        }
         checks
     }
 
@@ -784,11 +835,21 @@ impl ForgePlugin for DoctorPlugin {
                     .action(ArgAction::SetTrue)
                     .help("Assume \"yes\"; run --fix remedies without prompting"),
             )
+            .arg(
+                Arg::new("build")
+                    .long("build")
+                    .action(ArgAction::SetTrue)
+                    .help(
+                        "Also run a smoke-build (`cargo build --target wasm32v1-none`) \
+                         of the current project and report success/failure with timing",
+                    ),
+            )
     }
 
     fn run(&self, matches: &ArgMatches, ctx: &ForgeContext) -> Result<()> {
         let use_json = ctx.json || matches.get_flag("json");
         let do_fix = matches.get_flag("fix");
+        let do_build = matches.get_flag("build");
         let assume_yes = ctx.yes || matches.get_flag("yes");
 
         if ctx.offline && do_fix {
@@ -798,7 +859,7 @@ impl ForgePlugin for DoctorPlugin {
             ));
         }
 
-        let mut checks = self.gather_checks(ctx);
+        let mut checks = self.gather_checks(ctx, do_build);
 
         if do_fix {
             let remedies = fixable_remedies(&checks);
@@ -811,7 +872,7 @@ impl ForgePlugin for DoctorPlugin {
                 }
                 // Re-check so the final report reflects the fixes; any
                 // non-fixable issues (and any remedy that failed) remain.
-                checks = self.gather_checks(ctx);
+                checks = self.gather_checks(ctx, do_build);
             }
         }
 
@@ -909,6 +970,14 @@ mod tests {
             fix: None,
         }];
         assert_eq!(failure_count(&checks), 0);
+    }
+
+    // ---- wasm smoke-build check ----
+
+    #[test]
+    fn wasm_build_check_skipped_outside_a_project() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(wasm_build_check(dir.path()).is_none());
     }
 
     // ---- soroban-sdk version check ----

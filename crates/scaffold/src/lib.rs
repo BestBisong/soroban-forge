@@ -118,6 +118,7 @@ pub fn template_description(name: &str) -> Option<&'static str> {
         "payment-splitter" => Some("splits received funds between payees by fixed shares"),
         "subscription" => Some("recurring payment charged once per elapsed interval"),
         "token" => Some("SEP-41 fungible token (soroban_sdk::token::TokenInterface)"),
+        "upgradeable" => Some("admin-gated upgradeable contract (update_current_contract_wasm)"),
         "vesting" => Some("token vesting with cliff + linear release schedule"),
         "wrapped-asset" => Some("mints a wrapper token on deposit and burns it on withdraw 1:1"),
         _ => None,

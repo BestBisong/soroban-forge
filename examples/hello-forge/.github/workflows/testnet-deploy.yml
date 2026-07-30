@@ -13,6 +13,9 @@ on:
 permissions:
   contents: read
 
+env:
+  STELLAR_CLI_VERSION: v27.0.0
+
 jobs:
   deploy:
     name: "hello-forge: deploy to testnet"
@@ -25,14 +28,23 @@ jobs:
         with:
           targets: wasm32v1-none
       - uses: Swatinem/rust-cache@v2
+      - name: Cache stellar-cli
+        id: cache-stellar-cli
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/bin/stellar
+          key: stellar-cli-${{ env.STELLAR_CLI_VERSION }}
       - name: Install stellar-cli
-        # Official installer, see:
-        # https://developers.stellar.org/docs/build/smart-contracts/getting-started/setup
-        # TODO(verify): pin to a stellar-cli release once the installer supports it.
+        if: steps.cache-stellar-cli.outputs.cache-hit != 'true'
+        # Official binary from stellar-cli releases, pinned to a specific version.
+        # See: https://github.com/stellar/stellar-cli/releases
         run: |
-          curl -fsSL https://github.com/stellar/stellar-cli/raw/main/install.sh | sh
+          mkdir -p ~/.local/bin
+          curl -fsSL \
+            "https://github.com/stellar/stellar-cli/releases/download/${STELLAR_CLI_VERSION}/stellar-cli-${STELLAR_CLI_VERSION#v}-$(uname -m)-unknown-linux-gnu.tar.gz" \
+            | tar xz -C ~/.local/bin stellar
+          chmod +x ~/.local/bin/stellar
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
       - name: Build contract
         run: cargo build --target wasm32v1-none --release
       - name: Deploy to testnet

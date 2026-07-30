@@ -37,8 +37,8 @@ pub fn build_command(plugins: &[Box<dyn ForgePlugin>]) -> Command {
                 .long("verbose")
                 .short('v')
                 .global(true)
-                .action(ArgAction::SetTrue)
-                .help("Enable verbose (debug) logging"),
+                .action(ArgAction::Count)
+                .help("Increase log verbosity (-v debug, -vv trace)"),
         )
         .arg(
             Arg::new("quiet")
@@ -96,7 +96,7 @@ pub fn build_command(plugins: &[Box<dyn ForgePlugin>]) -> Command {
 
 /// Route parsed matches to the owning plugin or an external subcommand.
 pub fn dispatch(plugins: &[Box<dyn ForgePlugin>], matches: &ArgMatches) -> Result<()> {
-    let verbose = matches.get_flag("verbose");
+    let verbose = matches.get_count("verbose");
     let quiet = matches.get_flag("quiet");
     let json = matches.get_flag("json");
     let yes = matches.get_flag("yes");
@@ -140,7 +140,7 @@ pub fn run(plugins: Vec<Box<dyn ForgePlugin>>) -> Result<()> {
     }
 
     let log_file = matches.get_one::<String>("log-file").map(std::path::Path::new);
-    crate::logging::init(matches.get_flag("verbose"), log_file)?;
+    crate::logging::init(matches.get_count("verbose"), log_file)?;
 
     let is_json = matches.get_flag("json");
     let result = dispatch(&plugins, &matches);
@@ -361,7 +361,16 @@ mod tests {
             .try_get_matches_from(["soroban-forge", "--quiet", "--verbose", "dummy", "--flag"])
             .unwrap();
         assert!(matches.get_flag("quiet"));
-        assert!(matches.get_flag("verbose"));
+        assert_eq!(matches.get_count("verbose"), 1);
+    }
+
+    #[test]
+    fn verbose_is_repeatable() {
+        let (plugins, _) = dummy();
+        let matches = build_command(&plugins)
+            .try_get_matches_from(["soroban-forge", "-vv", "dummy", "--flag"])
+            .unwrap();
+        assert_eq!(matches.get_count("verbose"), 2);
     }
 
     #[test]

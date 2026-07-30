@@ -8,10 +8,16 @@ Each provider is a subdirectory. `github/` is the richest one:
 - `build-test.yml` — cargo test + wasm build on push/PR
 - `build-test-matrix.yml` — the same job run once per Rust toolchain, stable
   plus a pinned MSRV (only written with `--matrix`)
+- `build-test.yml` — cargo test + wasm build on push/PR, plus a `lint` job
+  running `cargo fmt --all --check` and `cargo clippy --all-targets -- -D
+  warnings`
 - `contract-size.yml` — fails PRs when the built wasm exceeds a size limit
 - `testnet-deploy.yml` — manual testnet deploy wrapping the official
   stellar-cli (only written with `--deploy`); references GitHub secrets, never
   stores keys
+- `dependabot.yml` — weekly `cargo` and `github-actions` update PRs (only
+  written with `--dependabot`); lands at `.github/dependabot.yml`, not in
+  `.github/workflows/`
 
 The other providers each carry a single build+test file mirroring
 `build-test.yml`: `gitlab/.gitlab-ci.yml`, `circleci/config.yml` and

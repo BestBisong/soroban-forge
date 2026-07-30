@@ -22,6 +22,7 @@ soroban-forge-templates = { path = "crates/templates" }
 soroban-forge-verify = { path = "crates/verify" }
 soroban-forge-identity = { path = "crates/identity" }
 soroban-forge-network = { path = "crates/network" }
+soroban-forge-optimize = { path = "crates/optimize" }
 soroban-forge-init = { path = "crates/init" }
 clap_complete.workspace = true
 

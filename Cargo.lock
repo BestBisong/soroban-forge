@@ -1017,6 +1017,7 @@ dependencies = [
  "soroban-forge-identity",
  "soroban-forge-init",
  "soroban-forge-network",
+ "soroban-forge-optimize",
  "soroban-forge-scaffold",
  "soroban-forge-templates",
  "soroban-forge-testgen",

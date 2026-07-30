@@ -112,10 +112,13 @@ pub fn template_description(name: &str) -> Option<&'static str> {
         "faucet" => Some("token faucet dispensing a fixed amount per address with a cooldown"),
         "governance" => Some("DAO governance with weighted voting, quorum, and proposal execution"),
         "hello-world" => Some("minimal greeter contract (recommended starting point)"),
+        "lottery" => Some("randomized lottery with ticket purchases and prize pool distribution"),
         "merkle-airdrop" => Some("one-claim-per-address airdrop verified against a merkle root"),
         "multisig" => Some("M-of-N multisig account contract (CustomAccountInterface)"),
         "nft" => Some("NFT (non-fungible token) with per-token metadata and minting"),
         "payment-splitter" => Some("splits received funds between payees by fixed shares"),
+        "staking" => Some("proportional reward staking with O(1) acc_reward_per_share accumulator"),
+        "streaming" => Some("streams tokens linearly over time with cancels and withdrawals"),
         "subscription" => Some("recurring payment charged once per elapsed interval"),
         "token" => Some("SEP-41 fungible token (soroban_sdk::token::TokenInterface)"),
         "upgradeable" => Some("admin-gated upgradeable contract (update_current_contract_wasm)"),
@@ -142,7 +145,8 @@ pub fn template_catalog() -> Vec<TemplateInfo> {
         .map(|name| TemplateInfo {
             name,
             description: template_description(name)
-                .unwrap_or_else(|| "no description available".to_string()),
+                .unwrap_or("no description available")
+                .to_string(),
         })
         .collect()
 }
@@ -1144,7 +1148,7 @@ impl ForgePlugin for ScaffoldPlugin {
         let interactive = !ctx.quiet && !matches.get_flag("yes") && std::io::stdin().is_terminal();
         let extra_vars = resolve_extra_vars(&manifest, &overrides, interactive)?;
 
-        let mut vars = project_vars(name, &author);
+        let mut vars = project_vars(name, &author, &edition);
         vars.extend(extra_vars);
 
         log::debug!(
@@ -1235,7 +1239,7 @@ default = "MYT"
     fn template_toml_is_not_copied_into_generated_project() {
         let dir = tempfile::tempdir().unwrap();
         let dest = dir.path().join("demo");
-        generate("token", &dest, &project_vars("demo", "A"), false).unwrap();
+        generate("token", &dest, &project_vars("demo", "A", "2021"), false).unwrap();
         assert!(!dest.join("template.toml").exists());
     }
 
@@ -1247,7 +1251,6 @@ default = "MYT"
     }
 
     #[test]
-    fn lists_all_three_templates() {
     fn lists_all_bundled_templates() {
         assert_eq!(
             available_templates(),
@@ -1256,17 +1259,22 @@ default = "MYT"
                 "atomic-swap",
                 "crowdfund",
                 "escrow",
+                "faucet",
                 "governance",
                 "hello-world",
+                "lottery",
                 "multisig",
                 "nft",
                 "merkle-airdrop",
                 "multisig",
                 "nft",
                 "payment-splitter",
+                "staking",
+                "streaming",
                 "subscription",
                 "token",
-                "vesting"
+                "vesting",
+                "wrapped-asset"
             ]
         );
     }
@@ -1306,17 +1314,22 @@ default = "MYT"
                 "atomic-swap",
                 "crowdfund",
                 "escrow",
+                "faucet",
                 "governance",
                 "hello-world",
+                "lottery",
                 "multisig",
                 "nft",
                 "merkle-airdrop",
                 "multisig",
                 "nft",
                 "payment-splitter",
+                "staking",
+                "streaming",
                 "subscription",
                 "token",
-                "vesting"
+                "vesting",
+                "wrapped-asset"
             ]
         );
         for entry in &catalog {

@@ -138,6 +138,8 @@ impl ForgePlugin for InitPlugin {
                 &dir,
                 "github",
                 &project.name,
+                false,
+                false,
                 &GenerateOptions::default(),
                 false,
             )?;

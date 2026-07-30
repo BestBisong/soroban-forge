@@ -7,6 +7,9 @@
 //! - `contract-size.yml`: fails PRs when the built wasm exceeds a limit
 //! - `testnet-deploy.yml` (with `--deploy`): manual testnet deploy wrapping
 //!   the official stellar-cli; references GitHub secrets, never stores keys.
+//! - `release.yml` (with `--release`): tag-triggered (`v*.*.*`) build that
+//!   attaches the contract wasm and a SHA256 checksum to a GitHub Release,
+//!   after verifying the build is reproducible (same source, same hash).
 //!
 //! Presets live in the repository's top-level `presets/<provider>/` directory
 //! and are embedded at compile time. `{{project_name}}` / `{{crate_name}}`
@@ -27,6 +30,8 @@ static PRESETS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../../presets");
 const BASE_WORKFLOWS: &[&str] = &["build-test.yml", "contract-size.yml"];
 /// Workflow written only with `--deploy`.
 const DEPLOY_WORKFLOW: &str = "testnet-deploy.yml";
+/// Workflow written only with `--release`.
+const RELEASE_WORKFLOW: &str = "release.yml";
 /// Workflow written only with `--security-scan`.
 const SECURITY_SCAN_WORKFLOW: &str = "security-scan.yml";
 /// Deny config scaffolded alongside `--security-scan`.
@@ -99,6 +104,8 @@ pub fn generate(
     dir: &Path,
     provider: &str,
     project_name: &str,
+    deploy: bool,
+    release: bool,
     opts: &GenerateOptions,
     force: bool,
 ) -> Result<Vec<String>> {
@@ -133,6 +140,9 @@ pub fn generate(
             }
             if opts.healthcheck {
                 list.push((HEALTHCHECK_WORKFLOW, None));
+            }
+            if release {
+                list.push((RELEASE_WORKFLOW, None));
             }
             list
         }
@@ -183,6 +193,7 @@ pub fn format_report(
     provider: &str,
     name: &str,
     written: &[impl AsRef<str>],
+    release: bool,
     opts: &GenerateOptions,
 ) -> String {
     let mut out = format!("wrote {provider} workflows for `{name}`:\n");
@@ -216,6 +227,13 @@ pub fn format_report(
         out.push_str(
             "\ntestnet-healthcheck: the smoke entry point defaults to `version` then `ping`.\n\
              Edit testnet-healthcheck.yml to invoke your contract's real health method.\n",
+        );
+    }
+    if release {
+        out.push_str("\npush a tag matching `v*.*.*` (e.g. `v0.1.0`) to build the wasm,\n");
+        out.push_str("verify the build is reproducible, and publish it to a GitHub Release\n");
+        out.push_str(
+            "with a SHA256 checksum. Uses the default GITHUB_TOKEN — no secrets needed.\n",
         );
     }
     out
@@ -257,6 +275,12 @@ impl ForgePlugin for CiPresetsPlugin {
                     .help("Also write the scheduled testnet health-check workflow (GitHub only)"),
             )
             .arg(
+                Arg::new("release")
+                    .long("release")
+                    .action(ArgAction::SetTrue)
+                    .help("Also write a tag-triggered (v*.*.*) release workflow: builds the wasm, verifies it's reproducible, and attaches it (with a checksum) to a GitHub Release"),
+            )
+            .arg(
                 Arg::new("path")
                     .long("path")
                     .help("Project directory [default: current directory]"),
@@ -282,7 +306,15 @@ impl ForgePlugin for CiPresetsPlugin {
             healthcheck: matches.get_flag("healthcheck"),
         };
 
-        let written = generate(&dir, provider, &name, &opts, matches.get_flag("force"))?;
+        let written = generate(
+            &dir,
+            provider,
+            &name,
+            opts.deploy,
+            matches.get_flag("release"),
+            &opts,
+            matches.get_flag("force"),
+        )?;
 
         if ctx.json {
             let report = serde_json::json!({
@@ -295,7 +327,7 @@ impl ForgePlugin for CiPresetsPlugin {
             });
             println!("{}", serde_json::to_string_pretty(&report).unwrap());
         } else if !ctx.quiet {
-            print!("{}", format_report(provider, &name, &written, &opts));
+            print!("{}", format_report(provider, &name, &written, matches.get_flag("release"), &opts));
         }
         Ok(())
     }
@@ -323,7 +355,7 @@ mod tests {
 
     #[test]
     fn report_lists_provider_project_and_files() {
-        let report = format_report("github", "demo", &["a.yml", "b.yml"], &base_opts());
+        let report = format_report("github", "demo", &["a.yml", "b.yml"], false, &base_opts());
         assert_eq!(
             report,
             "wrote github workflows for `demo`:\n  a.yml\n  b.yml\n"
@@ -332,21 +364,35 @@ mod tests {
 
     #[test]
     fn deploy_report_explains_required_secret() {
-        let report = format_report("github", "demo", &["deploy.yml"], &deploy_opts());
+        let report = format_report("github", "demo", &["deploy.yml"], false, &deploy_opts());
         assert!(report.contains("STELLAR_DEPLOYER_SECRET"));
         assert!(report.contains("Settings → Secrets and variables → Actions"));
     }
 
     #[test]
     fn base_report_omits_deploy_guidance() {
-        let report = format_report("github", "demo", &["build.yml"], &base_opts());
+        let report = format_report("github", "demo", &["build.yml"], false, &base_opts());
         assert!(!report.contains("STELLAR_DEPLOYER_SECRET"));
+    }
+
+    #[test]
+    fn release_report_explains_tag_trigger() {
+        let report = format_report("github", "demo", &["release.yml"], true, &base_opts());
+        assert!(report.contains("v*.*.*"));
+        assert!(report.contains("GitHub Release"));
+        assert!(!report.contains("STELLAR_DEPLOYER_SECRET"));
+    }
+
+    #[test]
+    fn base_report_omits_release_guidance() {
+        let report = format_report("github", "demo", &["build.yml"], false, &base_opts());
+        assert!(!report.contains("v*.*.*"));
     }
 
     #[test]
     fn unknown_provider_error_lists_available() {
         let dir = tempfile::tempdir().unwrap();
-        let err = generate(dir.path(), "unknown", "demo", &base_opts(), false).unwrap_err();
+        let err = generate(dir.path(), "unknown", "demo", false, false, &base_opts(), false).unwrap_err();
         assert!(err.to_string().contains("github"));
         assert!(err.to_string().contains("gitlab"));
     }
@@ -354,7 +400,7 @@ mod tests {
     #[test]
     fn writes_base_workflows() {
         let dir = tempfile::tempdir().unwrap();
-        let written = generate(dir.path(), "github", "demo", &base_opts(), false).unwrap();
+        let written = generate(dir.path(), "github", "demo", false, false, &base_opts(), false).unwrap();
         assert_eq!(
             written,
             vec![
@@ -370,12 +416,13 @@ mod tests {
             .path()
             .join(".github/workflows/testnet-deploy.yml")
             .exists());
+        assert!(!dir.path().join(".github/workflows/release.yml").exists());
     }
 
     #[test]
     fn writes_gitlab_preset() {
         let dir = tempfile::tempdir().unwrap();
-        let written = generate(dir.path(), "gitlab", "demo-gitlab", &base_opts(), false).unwrap();
+        let written = generate(dir.path(), "gitlab", "demo-gitlab", false, false, &base_opts(), false).unwrap();
         assert_eq!(written, vec![".gitlab-ci.yml"]);
         let contents = std::fs::read_to_string(dir.path().join(".gitlab-ci.yml")).unwrap();
         assert!(contents.contains("CI/CD configuration for demo-gitlab"));
@@ -387,7 +434,7 @@ mod tests {
     #[test]
     fn writes_circleci_preset() {
         let dir = tempfile::tempdir().unwrap();
-        let written = generate(dir.path(), "circleci", "my-contract", &base_opts(), false).unwrap();
+        let written = generate(dir.path(), "circleci", "my-contract", false, false, &base_opts(), false).unwrap();
         assert_eq!(written, vec![".circleci/config.yml"]);
         let contents = std::fs::read_to_string(dir.path().join(".circleci/config.yml")).unwrap();
         assert!(contents.contains("my-contract"), "{contents}");
@@ -400,7 +447,7 @@ mod tests {
     #[test]
     fn deploy_workflow_references_secrets_only() {
         let dir = tempfile::tempdir().unwrap();
-        generate(dir.path(), "github", "my-project", &deploy_opts(), false).unwrap();
+        generate(dir.path(), "github", "my-project", true, false, &deploy_opts(), false).unwrap();
         let deploy =
             std::fs::read_to_string(dir.path().join(".github/workflows/testnet-deploy.yml"))
                 .unwrap();
@@ -417,7 +464,7 @@ mod tests {
     fn security_scan_workflow_and_deny_toml_written() {
         let dir = tempfile::tempdir().unwrap();
         let opts = GenerateOptions { security_scan: true, ..Default::default() };
-        let written = generate(dir.path(), "github", "demo", &opts, false).unwrap();
+        let written = generate(dir.path(), "github", "demo", false, false, &opts, false).unwrap();
         assert!(written.iter().any(|p| p.ends_with("security-scan.yml")), "{written:?}");
         assert!(written.iter().any(|p| p == "deny.toml"), "{written:?}");
         let scan = std::fs::read_to_string(
@@ -434,7 +481,7 @@ mod tests {
     fn healthcheck_workflow_written() {
         let dir = tempfile::tempdir().unwrap();
         let opts = GenerateOptions { healthcheck: true, ..Default::default() };
-        let written = generate(dir.path(), "github", "demo", &opts, false).unwrap();
+        let written = generate(dir.path(), "github", "demo", false, false, &opts, false).unwrap();
         assert!(written.iter().any(|p| p.ends_with("testnet-healthcheck.yml")), "{written:?}");
         let hc = std::fs::read_to_string(
             dir.path().join(".github/workflows/testnet-healthcheck.yml"),
@@ -448,7 +495,7 @@ mod tests {
     #[test]
     fn contract_size_workflow_compares_base_and_comments() {
         let dir = tempfile::tempdir().unwrap();
-        generate(dir.path(), "github", "demo", &base_opts(), false).unwrap();
+        generate(dir.path(), "github", "demo", false, false, &base_opts(), false).unwrap();
         let size = std::fs::read_to_string(
             dir.path().join(".github/workflows/contract-size.yml"),
         )
@@ -470,11 +517,11 @@ mod tests {
     #[test]
     fn refuses_overwrite_without_force() {
         let dir = tempfile::tempdir().unwrap();
-        generate(dir.path(), "github", "demo", &base_opts(), false).unwrap();
+        generate(dir.path(), "github", "demo", false, false, &base_opts(), false).unwrap();
         assert!(matches!(
-            generate(dir.path(), "github", "demo", &base_opts(), false),
+            generate(dir.path(), "github", "demo", false, false, &base_opts(), false),
             Err(ForgeError::AlreadyExists(_))
         ));
-        generate(dir.path(), "github", "demo", &base_opts(), true).unwrap();
+        generate(dir.path(), "github", "demo", false, false, &base_opts(), true).unwrap();
     }
 }

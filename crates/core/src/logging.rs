@@ -60,8 +60,16 @@ impl Log for ForgeLogger {
 }
 
 /// Initialize normal stderr logging and, when requested, a JSON-lines log.
-pub fn init(verbose: bool, log_file: Option<&Path>) -> Result<()> {
-    let level = if verbose { "debug" } else { "info" };
+///
+/// `verbose` is the number of times `-v`/`--verbose` was passed: `0` keeps
+/// the default `info` level, `1` (`-v`) raises it to `debug`, and `2+`
+/// (`-vv`) raises it to `trace`.
+pub fn init(verbose: u8, log_file: Option<&Path>) -> Result<()> {
+    let level = match verbose {
+        0 => "info",
+        1 => "debug",
+        _ => "trace",
+    };
     let mut builder =
         env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(level));
     builder.format_timestamp(None);

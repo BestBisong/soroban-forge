@@ -12,6 +12,7 @@ fn main() {
         Box::new(soroban_forge_templates::TemplatesPlugin),
         Box::new(soroban_forge_verify::VerifyPlugin),
         Box::new(soroban_forge_identity::IdentityPlugin),
+        Box::new(soroban_forge_deploy::DeployPlugin),
     ];
 
     // Intercept `completions <shell>` before full dispatch so we have access

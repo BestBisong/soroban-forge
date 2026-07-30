@@ -11,6 +11,7 @@
 - `soroban-forge doctor` — verify your toolchain and get fix instructions
 - `soroban-forge bindings ts` — generate a TypeScript client package from a built contract
 - `soroban-forge verify <contract-id>` — check that a deployed contract matches your local build
+- `soroban-forge deploy` — build (if needed) and deploy the contract, printing its contract ID
 
 ## Quickstart
 
@@ -63,6 +64,7 @@ Hitting an error? Check the
 | `doctor`                         | check rustc/cargo, `wasm32v1-none` target, stellar-cli    |
 | `bindings ts`                    | generate a TypeScript client package from a built contract wasm |
 | `verify <contract-id>`           | compare a deployed contract's wasm hash with the local release build (exit `1` on mismatch) |
+| `deploy --source <identity>`     | build (if needed) and deploy the contract, printing its contract ID |
 
 
 Global `--log-file <path>` writes structured JSON-lines diagnostics in addition

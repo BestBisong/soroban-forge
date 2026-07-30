@@ -23,6 +23,7 @@ soroban-forge-verify = { path = "crates/verify" }
 soroban-forge-identity = { path = "crates/identity" }
 soroban-forge-init = { path = "crates/init" }
 soroban-forge-deploy = { path = "crates/deploy" }
+soroban-forge-invoke = { path = "crates/invoke" }
 clap_complete.workspace = true
 
 [dev-dependencies]

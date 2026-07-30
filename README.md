@@ -62,6 +62,7 @@ Hitting an error? Check the
 | `ci-init --provider github`      | write CI workflows; `--deploy` adds manual testnet deploy |
 | `doctor`                         | check rustc/cargo, `wasm32v1-none` target, stellar-cli    |
 | `bindings ts`                    | generate a TypeScript client package from a built contract wasm |
+| `spec`                           | print the contract interface — entrypoints with their argument and return types — from the built wasm (`--json` for machine-readable output) |
 | `verify <contract-id>`           | compare a deployed contract's wasm hash with the local release build (exit `1` on mismatch) |
 
 
@@ -89,6 +90,7 @@ with its own README, tests and a small public surface; they meet only at the
 | 5 — Docs & DX | [`crates/doctor`](crates/doctor) + [`docs/`](docs) + [`examples/`](examples) | `doctor` |
 | 6 — TypeScript bindings | [`crates/bindings-ts`](crates/bindings-ts) | `bindings ts` |
 | 7 — Deployment verification | [`crates/verify`](crates/verify) | `verify` |
+| 8 — Contract interface dump | [`crates/spec`](crates/spec) | `spec` |
 
 > **Note:** See [`examples/README.md`](examples/README.md) for instructions on
 > regenerating the checked-in example projects.

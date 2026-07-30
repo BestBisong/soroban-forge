@@ -14,6 +14,7 @@ five hundred) can work in parallel with minimal merge conflicts.
 | 5 — Docs, examples & DX | `crates/doctor`, `docs/`, `examples/` | Person E | `doctor` |
 | 6 — TypeScript bindings generator | `crates/bindings-ts` | Person F | `bindings ts` |
 | 7 — Deployment verification | `crates/verify` | Person G | `verify` |
+| 8 — Contract interface dump | `crates/spec` | Person H | `spec` |
 
 Rules of the road:
 

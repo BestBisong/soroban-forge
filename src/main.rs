@@ -10,8 +10,11 @@ fn main() {
         Box::new(soroban_forge_doctor::DoctorPlugin),
         Box::new(soroban_forge_bindings_ts::BindingsTsPlugin),
         Box::new(soroban_forge_templates::TemplatesPlugin),
+        Box::new(soroban_forge_spec::SpecPlugin),
         Box::new(soroban_forge_verify::VerifyPlugin),
         Box::new(soroban_forge_identity::IdentityPlugin),
+        Box::new(soroban_forge_deploy::DeployPlugin),
+        Box::new(soroban_forge_invoke::InvokePlugin),
     ];
 
     // Intercept `completions <shell>` before full dispatch so we have access

@@ -861,8 +861,7 @@ mod tests {
     fn lists_all_bundled_templates() {
         assert_eq!(
             available_templates(),
-            vec!["amm", "crowdfund", "hello-world", "multisig", "nft", "staking", "token"]
-            vec!["amm", "atomic-swap", "crowdfund", "escrow", "governance", "hello-world", "multisig", "nft", "token"]
+            vec!["amm", "atomic-swap", "crowdfund", "escrow", "governance", "hello-world", "multisig", "nft", "staking", "token"]
         );
     }
 
@@ -896,8 +895,7 @@ mod tests {
         let names: Vec<&str> = catalog.iter().map(|t| t.name).collect();
         assert_eq!(
             names,
-            vec!["amm", "crowdfund", "hello-world", "multisig", "nft", "staking", "token"]
-            vec!["amm", "atomic-swap", "crowdfund", "escrow", "governance", "hello-world", "multisig", "nft", "token"]
+            vec!["amm", "atomic-swap", "crowdfund", "escrow", "governance", "hello-world", "multisig", "nft", "staking", "token"]
         );
         for entry in &catalog {
             assert!(

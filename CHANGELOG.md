@@ -7,6 +7,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Added
+- `ci-init --provider github` now emits a `lint` job in `build-test.yml` running
+  `cargo fmt --all --check` and `cargo clippy --all-targets -- -D warnings`, so
+  generated CI fails on formatting or clippy violations
+- `ci-init --dependabot` writes `.github/dependabot.yml` with weekly update
+  schedules for the `cargo` and `github-actions` ecosystems
+- `doctor` reports whether Docker is installed and its daemon is running
+  (a warning when absent — it is only needed for reproducible wasm builds)
+- `doctor` warns when git's `user.name`/`user.email` are unset, printing the
+  `git config` commands to set them, since commits in a freshly created
+  project otherwise fail confusingly
 - `soroban-forge spec` — prints the built contract's interface (every
   entrypoint with its argument and return types, plus the types they refer to)
   by wrapping `stellar contract info interface`; `--json` emits the

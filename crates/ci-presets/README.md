@@ -5,12 +5,21 @@ CI/CD & DevOps presets. **Owner: Person D.**
 Implements the `soroban-forge ci-init --provider github` subcommand, writing
 GitHub Actions workflows into the target project:
 
+| workflow             | trigger             | what it does                                   |
+|----------------------|---------------------|------------------------------------------------|
+| `build-test.yml`     | push main, PR       | `cargo test` + release wasm build, and a `lint` job running `cargo fmt --all --check` + `cargo clippy --all-targets -- -D warnings` |
+| `contract-size.yml`  | PR                  | fails when the wasm exceeds `MAX_WASM_KB`      |
+| `testnet-deploy.yml` | manual (`--deploy`) | wraps official `stellar contract deploy`       |
 | workflow             | trigger               | what it does                                            |
 |----------------------|------------------------|---------------------------------------------------------|
 | `build-test.yml`     | push main, PR          | `cargo test` + release wasm build                       |
 | `contract-size.yml`  | PR                     | fails when the wasm exceeds `MAX_WASM_KB`               |
 | `testnet-deploy.yml` | manual (`--deploy`)    | wraps official `stellar contract deploy`                |
 | `release.yml`        | tag `v*.*.*` (`--release`) | builds the wasm, verifies the build is reproducible, attaches it + a SHA256 checksum to a GitHub Release |
+
+`--dependabot` additionally writes `.github/dependabot.yml` (weekly `cargo`
+and `github-actions` updates). It is a config file, not a workflow, so it
+lands in `.github/` rather than `.github/workflows/`.
 
 The global `--quiet` flag suppresses the workflow summary and deploy-secret
 reminder without changing the generated workflows.

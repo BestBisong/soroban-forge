@@ -1121,6 +1121,7 @@ dependencies = [
  "serde_json",
  "soroban-forge-core",
  "tempfile",
+ "toml",
 ]
 
 [[package]]

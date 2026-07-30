@@ -7,7 +7,7 @@
 - `soroban-forge new` — start from a working, tested contract template
 - `soroban-forge init` — add forge configuration to an existing contract
 - `soroban-forge test-init` — generate fixtures, a smoke test and a snapshot helper for an existing contract
-- `soroban-forge ci-init` — add GitHub Actions workflows (build+test, contract-size check, optional testnet deploy)
+- `soroban-forge ci-init` — add CI workflows for GitHub, GitLab, CircleCI or Bitbucket (build+test, contract-size check, optional testnet deploy)
 - `soroban-forge doctor` — verify your toolchain and get fix instructions
 - `soroban-forge bindings ts` — generate a TypeScript client package from a built contract
 - `soroban-forge verify <contract-id>` — check that a deployed contract matches your local build
@@ -60,8 +60,8 @@ Hitting an error? Check the
 | `new <name> --template <t>`      | scaffold a project (`--list-templates` to see options)    |
 | `init [--tests] [--ci]`         | configure an existing contract without creating a crate  |
 | `templates`                      | list the bundled templates with a one-line description    |
-| `test-init`                      | generate `tests/` fixtures + smoke test for a contract    |
-| `ci-init --provider github`      | write CI workflows; `--deploy` adds manual testnet deploy |
+| `test-init`                      | generate fixtures + smoke/TTL tests; `--layout inline` puts them in `src/` |
+| `ci-init --provider github`      | write CI workflows (`github`, `gitlab`, `circleci`, `bitbucket`); `--deploy` adds manual testnet deploy, `--matrix` a toolchain matrix |
 | `doctor`                         | check rustc/cargo, `wasm32v1-none` target, stellar-cli    |
 | `bindings ts`                    | generate a TypeScript client package from a built contract wasm |
 | `spec`                           | print the contract interface — entrypoints with their argument and return types — from the built wasm (`--json` for machine-readable output) |

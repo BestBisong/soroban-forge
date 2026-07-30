@@ -7,6 +7,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Added
+- `test-init` now generates `tests/forge_ttl.rs` for contracts that use
+  persistent storage: tests that bump an entry with `extend_ttl` and assert it
+  outlives a ledger advance, as a starting point for rent regressions
+- `test-init --layout <tests|inline>` — choose between the `tests/`
+  integration-test directory (default) and a single `#[cfg(test)] mod
+  forge_tests` inside `src/`
+- `ci-init --provider bitbucket` — generates `bitbucket-pipelines.yml`
+  mirroring the GitHub build-test preset
+- `ci-init --matrix [--msrv <version>]` — a build/test workflow that runs the
+  job once per Rust toolchain (stable plus a pinned MSRV)
 - `ci-init --provider github` now emits a `lint` job in `build-test.yml` running
   `cargo fmt --all --check` and `cargo clippy --all-targets -- -D warnings`, so
   generated CI fails on formatting or clippy violations

@@ -31,6 +31,8 @@ static PRESETS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../../presets");
 
 /// Workflows always written (GitHub).
 const BASE_WORKFLOWS: &[&str] = &["build-test.yml", "contract-size.yml"];
+/// Workflow written only with `--matrix`.
+const MATRIX_WORKFLOW: &str = "build-test-matrix.yml";
 /// Workflow written only with `--deploy`.
 const DEPLOY_WORKFLOW: &str = "testnet-deploy.yml";
 /// Workflow written only with `--release`.
@@ -41,6 +43,9 @@ const SECURITY_SCAN_WORKFLOW: &str = "security-scan.yml";
 const DENY_TOML: &str = "deny.toml";
 /// Workflow written only with `--healthcheck`.
 const HEALTHCHECK_WORKFLOW: &str = "testnet-healthcheck.yml";
+/// MSRV toolchain paired with `stable` in the matrix workflow when `--msrv`
+/// is not given.
+pub const DEFAULT_MSRV: &str = "1.84";
 /// Dependabot config written only with `--dependabot`.
 const DEPENDABOT_CONFIG: &str = "dependabot.yml";
 
@@ -58,7 +63,7 @@ pub fn available_providers() -> Vec<&'static str> {
 pub fn output_dir(provider: &str) -> &'static str {
     match provider {
         "github" => ".github/workflows",
-        "gitlab" => ".",
+        "gitlab" | "bitbucket" => ".",
         "circleci" => ".circleci",
         _ => unreachable!("validated against available_providers()"),
     }
@@ -101,6 +106,11 @@ pub struct GenerateOptions {
     pub security_scan: bool,
     /// Also write the scheduled testnet health-check workflow.
     pub healthcheck: bool,
+    /// Also write the toolchain-matrix build/test workflow.
+    pub matrix: bool,
+    /// Pinned MSRV toolchain used by the matrix workflow alongside `stable`.
+    /// `None` falls back to [`DEFAULT_MSRV`].
+    pub msrv: Option<String>,
     /// Also write `.github/dependabot.yml` (weekly cargo + github-actions
     /// updates).
     pub dependabot: bool,
@@ -127,6 +137,10 @@ pub fn generate(
     let mut vars = Vars::new();
     vars.insert("project_name".into(), project_name.to_string());
     vars.insert("crate_name".into(), project_name.replace('-', "_"));
+    vars.insert(
+        "msrv".into(),
+        opts.msrv.clone().unwrap_or_else(|| DEFAULT_MSRV.to_string()),
+    );
 
     let out_rel = output_dir(provider);
     let out_dir = dir.join(out_rel);
@@ -150,6 +164,8 @@ pub fn generate(
             if opts.healthcheck {
                 list.push((HEALTHCHECK_WORKFLOW, None));
             }
+            if opts.matrix {
+                list.push((MATRIX_WORKFLOW, None));
             if opts.dependabot {
                 // dependabot.yml lives in .github/, not .github/workflows/.
                 list.push((DEPENDABOT_CONFIG, Some(".github")));
@@ -157,6 +173,7 @@ pub fn generate(
             list
         }
         "gitlab" => vec![(".gitlab-ci.yml", None)],
+        "bitbucket" => vec![("bitbucket-pipelines.yml", None)],
         "circleci" => vec![("config.yml", None)],
         _ => {
             return Err(ForgeError::InvalidArgument(format!(
@@ -244,6 +261,13 @@ pub fn format_report(
              Edit testnet-healthcheck.yml to invoke your contract's real health method.\n",
         );
     }
+    if opts.matrix {
+        let msrv = opts.msrv.as_deref().unwrap_or(DEFAULT_MSRV);
+        out.push_str(&format!(
+            "\nbuild-test-matrix: the job runs once per toolchain — stable and MSRV {msrv}.\n\
+             Pass --msrv <version> to pin a different MSRV, and keep it in sync with\n\
+             `rust-version` in Cargo.toml.\n"
+        ));
     if release {
         out.push_str("\npush a tag matching `v*.*.*` (e.g. `v0.1.0`) to build the wasm,\n");
         out.push_str("verify the build is reproducible, and publish it to a GitHub Release\n");
@@ -269,7 +293,7 @@ impl ForgePlugin for CiPresetsPlugin {
                 Arg::new("provider")
                     .long("provider")
                     .default_value("github")
-                    .help("CI provider (`github`, `gitlab`, or `circleci`)"),
+                    .help("CI provider (`github`, `gitlab`, `circleci`, or `bitbucket`)"),
             )
             .arg(
                 Arg::new("deploy")
@@ -290,6 +314,16 @@ impl ForgePlugin for CiPresetsPlugin {
                     .help("Also write the scheduled testnet health-check workflow (GitHub only)"),
             )
             .arg(
+                Arg::new("matrix")
+                    .long("matrix")
+                    .action(ArgAction::SetTrue)
+                    .help("Also write a build/test workflow that runs across a Rust toolchain matrix (GitHub only)"),
+            )
+            .arg(
+                Arg::new("msrv")
+                    .long("msrv")
+                    .value_name("VERSION")
+                    .help("MSRV toolchain paired with stable in the --matrix workflow [default: 1.84]"),
                 Arg::new("dependabot")
                     .long("dependabot")
                     .action(ArgAction::SetTrue)
@@ -323,6 +357,8 @@ impl ForgePlugin for CiPresetsPlugin {
             deploy: matches.get_flag("deploy"),
             security_scan: matches.get_flag("security-scan"),
             healthcheck: matches.get_flag("healthcheck"),
+            matrix: matches.get_flag("matrix"),
+            msrv: matches.get_one::<String>("msrv").cloned(),
             dependabot: matches.get_flag("dependabot"),
         };
 
@@ -336,6 +372,8 @@ impl ForgePlugin for CiPresetsPlugin {
                 "deploy_enabled": opts.deploy,
                 "security_scan_enabled": opts.security_scan,
                 "healthcheck_enabled": opts.healthcheck,
+                "matrix_enabled": opts.matrix,
+                "msrv": opts.msrv.as_deref().unwrap_or(DEFAULT_MSRV),
                 "dependabot_enabled": opts.dependabot,
             });
             println!("{}", serde_json::to_string_pretty(&report).unwrap());
@@ -364,6 +402,84 @@ mod tests {
         assert!(providers.contains(&"github"));
         assert!(providers.contains(&"gitlab"));
         assert!(providers.contains(&"circleci"));
+        assert!(providers.contains(&"bitbucket"));
+    }
+
+    #[test]
+    fn writes_bitbucket_preset() {
+        let dir = tempfile::tempdir().unwrap();
+        let written = generate(dir.path(), "bitbucket", "my-contract", &base_opts(), false).unwrap();
+        assert_eq!(written, vec!["bitbucket-pipelines.yml"]);
+        let contents =
+            std::fs::read_to_string(dir.path().join("bitbucket-pipelines.yml")).unwrap();
+        // Mirrors the GitHub build-test preset: tests then a wasm release build.
+        assert!(contents.contains("my-contract: build & test"), "{contents}");
+        assert!(contents.contains("cargo test"), "{contents}");
+        assert!(
+            contents.contains("cargo build --target wasm32v1-none --release"),
+            "{contents}"
+        );
+        assert!(contents.contains("my_contract.wasm"), "{contents}");
+        // Pipelines-specific structure.
+        assert!(contents.contains("pipelines:"), "{contents}");
+        assert!(contents.contains("pull-requests:"), "{contents}");
+        assert!(!contents.contains("{{project_name}}"), "{contents}");
+        assert!(!contents.contains("{{crate_name}}"), "{contents}");
+    }
+
+    #[test]
+    fn matrix_workflow_runs_job_per_toolchain() {
+        let dir = tempfile::tempdir().unwrap();
+        let opts = GenerateOptions { matrix: true, ..Default::default() };
+        let written = generate(dir.path(), "github", "demo", &opts, false).unwrap();
+        assert!(
+            written.iter().any(|p| p.ends_with("build-test-matrix.yml")),
+            "{written:?}"
+        );
+        let wf = std::fs::read_to_string(
+            dir.path().join(".github/workflows/build-test-matrix.yml"),
+        )
+        .unwrap();
+        assert!(wf.contains("strategy:"), "{wf}");
+        assert!(wf.contains("toolchain: [\"stable\", \"1.84\"]"), "{wf}");
+        // Each matrix entry installs its own toolchain and runs the same job.
+        assert!(wf.contains("toolchain: ${{ matrix.toolchain }}"), "{wf}");
+        assert!(wf.contains("cargo test"), "{wf}");
+        assert!(
+            wf.contains("cargo build --target wasm32v1-none --release"),
+            "{wf}"
+        );
+        assert!(!wf.contains("{{project_name}}"), "{wf}");
+        assert!(!wf.contains("{{msrv}}"), "{wf}");
+    }
+
+    #[test]
+    fn matrix_workflow_honours_custom_msrv() {
+        let dir = tempfile::tempdir().unwrap();
+        let opts = GenerateOptions {
+            matrix: true,
+            msrv: Some("1.81".into()),
+            ..Default::default()
+        };
+        generate(dir.path(), "github", "demo", &opts, false).unwrap();
+        let wf = std::fs::read_to_string(
+            dir.path().join(".github/workflows/build-test-matrix.yml"),
+        )
+        .unwrap();
+        assert!(wf.contains("toolchain: [\"stable\", \"1.81\"]"), "{wf}");
+
+        let report = format_report("github", "demo", &["build-test-matrix.yml"], &opts);
+        assert!(report.contains("MSRV 1.81"), "{report}");
+    }
+
+    #[test]
+    fn base_run_omits_matrix_workflow() {
+        let dir = tempfile::tempdir().unwrap();
+        generate(dir.path(), "github", "demo", &base_opts(), false).unwrap();
+        assert!(!dir
+            .path()
+            .join(".github/workflows/build-test-matrix.yml")
+            .exists());
     }
 
     #[test]

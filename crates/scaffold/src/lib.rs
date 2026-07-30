@@ -10,6 +10,15 @@
 //! is how templates ship a `Cargo.toml.hbs` without cargo mistaking it for a
 //! real manifest.
 //!
+//! Built-in variables: `project_name`, `crate_name`, `author`, `sdk_version`,
+//! `edition`. A template may declare further variables in a `template.toml`
+//! manifest (see [`manifest`]); those are filled from `--var name=value`, from
+//! the manifest default, or by prompting when the session is interactive.
+
+pub mod manifest;
+
+use std::collections::BTreeMap;
+use std::io::{IsTerminal, Write};
 //! Available variables: `project_name`, `crate_name`, `author`, `sdk_version`,
 //! plus any extra variables a template declares in its `template.toml` (see
 //! [`manifest`]).
@@ -26,6 +35,8 @@ use clap::{Arg, ArgAction, ArgMatches, Command};
 use include_dir::{include_dir, Dir};
 use soroban_forge_core::render::{render_str, Vars};
 use soroban_forge_core::{ForgeContext, ForgeError, ForgePlugin, Result};
+
+pub use manifest::{TemplateManifest, TemplateVariable};
 
 static TEMPLATES: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../../templates");
 
@@ -155,6 +166,118 @@ pub fn validate_project_name(name: &str) -> Result<()> {
     } else {
         Err(ForgeError::InvalidArgument(format!(
             "`{name}` is not a valid project name (use lowercase letters, digits, `-` or `_`, starting with a letter)"
+        )))
+    }
+}
+
+/// Read and parse the `template.toml` of a bundled template.
+///
+/// Returns `Ok(None)` when the template ships no manifest — the common case,
+/// since a manifest is only needed for custom variables.
+pub fn bundled_manifest(template: &str) -> Result<Option<TemplateManifest>> {
+    let Some(dir) = TEMPLATES.get_dir(template) else {
+        return Ok(None);
+    };
+    let Some(file) = dir.get_file(format!("{template}/{}", manifest::MANIFEST_FILE)) else {
+        return Ok(None);
+    };
+    let raw = file.contents_utf8().ok_or_else(|| {
+        ForgeError::Template(format!(
+            "{} of template `{template}` is not UTF-8",
+            manifest::MANIFEST_FILE
+        ))
+    })?;
+    manifest::parse_manifest(raw).map(Some)
+}
+
+/// Read and parse the `template.toml` at the root of a template directory on
+/// disk (used for `--from` clones).
+pub fn manifest_in_dir(dir: &Path) -> Result<Option<TemplateManifest>> {
+    let path = dir.join(manifest::MANIFEST_FILE);
+    if !path.is_file() {
+        return Ok(None);
+    }
+    let raw = std::fs::read_to_string(&path)
+        .map_err(ForgeError::io(format!("reading {}", path.display())))?;
+    manifest::parse_manifest(&raw).map(Some)
+}
+
+/// A [`manifest::VarPrompter`] that reads answers from stdin.
+///
+/// Thin system-touching wrapper; the resolution logic it feeds is unit-tested
+/// against a scripted prompter instead.
+pub struct StdinPrompter;
+
+impl manifest::VarPrompter for StdinPrompter {
+    fn ask(&mut self, var: &TemplateVariable) -> Option<String> {
+        match &var.default {
+            Some(default) => print!("{} [{}]: ", var.prompt_text(), default),
+            None => print!("{}: ", var.prompt_text()),
+        }
+        let _ = std::io::stdout().flush();
+        let mut answer = String::new();
+        if std::io::stdin().read_line(&mut answer).ok()? == 0 {
+            return None; // EOF
+        }
+        Some(answer.trim().to_string())
+    }
+}
+
+/// Whether missing template variables may be asked for interactively.
+///
+/// Never in `--json` mode (a prompt would corrupt the stream) and never with
+/// `--yes` (which means "don't ask me anything"), so scripted and CI runs fail
+/// fast on a missing required variable instead of hanging on a read.
+fn can_prompt(ctx: &ForgeContext) -> bool {
+    !ctx.json && !ctx.yes && std::io::stdin().is_terminal() && std::io::stdout().is_terminal()
+}
+
+/// Resolve a template's declared variables and merge them into `vars`.
+fn merge_template_vars(
+    manifest: Option<&TemplateManifest>,
+    supplied: &Vars,
+    ctx: &ForgeContext,
+    vars: &mut Vars,
+) -> Result<()> {
+    let empty = TemplateManifest::default();
+    let manifest = manifest.unwrap_or(&empty);
+
+    let resolved = if can_prompt(ctx) {
+        if !manifest.variables.is_empty() && !ctx.quiet {
+            println!("this template needs a few values (press enter to accept a default):");
+        }
+        manifest::resolve_variables(manifest, supplied, &mut StdinPrompter)?
+    } else {
+        manifest::resolve_variables(manifest, supplied, &mut manifest::NoPrompt)?
+    };
+
+    vars.extend(resolved);
+    Ok(())
+}
+
+/// Confirm an overwrite before `--force` writes over an existing directory.
+///
+/// `--force` alone is not treated as consent when a human is watching: the
+/// user is shown the path and asked. `--yes`, `--json` and non-interactive
+/// sessions skip the question — there `--force` *is* the explicit intent.
+fn confirm_overwrite(dest: &Path, ctx: &ForgeContext) -> Result<()> {
+    if !dest.exists() || !can_prompt(ctx) {
+        return Ok(());
+    }
+    print!(
+        "{} already exists — --force will overwrite files in it. continue? [y/N] ",
+        dest.display()
+    );
+    let _ = std::io::stdout().flush();
+    let mut answer = String::new();
+    let accepted = std::io::stdin().read_line(&mut answer).is_ok()
+        && matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes");
+    if accepted {
+        Ok(())
+    } else {
+        Err(ForgeError::InvalidArgument(format!(
+            "--force was declined — {} was left untouched",
+            dest.display()
         )))
     }
 }
@@ -408,6 +531,22 @@ pub fn generate_workspace(
 ///   to check connectivity)
 /// - the destination already exists and `force` is not set (`AlreadyExists`)
 pub fn generate_from_url(url: &str, dest: &Path, vars: &Vars, force: bool) -> Result<()> {
+    generate_from_url_with(url, dest, vars, force, &mut |_| Ok(Vars::new()))
+}
+
+/// [`generate_from_url`], plus a hook that sees the cloned template's
+/// `template.toml` (if any) and returns extra variables to render with.
+///
+/// The hook runs after the clone and before anything is written, which is what
+/// lets the CLI prompt for a remote template's custom variables — those are
+/// only knowable once the repository is on disk.
+pub fn generate_from_url_with(
+    url: &str,
+    dest: &Path,
+    vars: &Vars,
+    force: bool,
+    resolve: &mut dyn FnMut(Option<TemplateManifest>) -> Result<Vars>,
+) -> Result<()> {
     if dest.exists() && !force {
         return Err(ForgeError::AlreadyExists(dest.to_path_buf()));
     }
@@ -469,9 +608,13 @@ pub fn generate_from_url(url: &str, dest: &Path, vars: &Vars, force: bool) -> Re
             .map_err(ForgeError::io("removing .git from cloned template"))?;
     }
 
+    // Let the caller fill in whatever the clone's template.toml declares.
+    let mut vars = vars.clone();
+    vars.extend(resolve(manifest_in_dir(&clone_dest)?)?);
+
     // Render the cloned filesystem tree with variable substitution.
-    render_dir_fs(&clone_dest, &clone_dest, dest, vars)?;
-    write_forge_toml(dest, vars)?;
+    render_dir_fs(&clone_dest, &clone_dest, dest, &vars)?;
+    write_forge_toml(dest, &vars)?;
     Ok(())
     // `tmp` is dropped here, cleaning up the temp clone directory automatically.
 }
@@ -500,6 +643,9 @@ fn render_dir_fs(dir: &Path, source_root: &Path, dest: &Path, vars: &Vars) -> Re
             let rel = path
                 .strip_prefix(source_root)
                 .expect("path must be under source_root");
+            if is_manifest(rel) {
+                continue; // template.toml configures generation; it is not output
+            }
 
             // Apply variable substitution to the relative path (including each
             // component), then strip a trailing .hbs suffix if present.
@@ -539,6 +685,12 @@ fn render_dir_fs(dir: &Path, source_root: &Path, dest: &Path, vars: &Vars) -> Re
     Ok(())
 }
 
+/// True for the template's own `template.toml`, which lives at the root of a
+/// template and drives generation rather than being part of the output.
+fn is_manifest(rel: &Path) -> bool {
+    rel == Path::new(manifest::MANIFEST_FILE)
+}
+
 /// Print the planned file tree for a dry-run without writing anything to disk.
 fn print_dry_run_tree(dir: &Dir<'_>, template_root: &str, project_name: &str) {
     for entry in dir.dirs() {
@@ -549,6 +701,9 @@ fn print_dry_run_tree(dir: &Dir<'_>, template_root: &str, project_name: &str) {
             .path()
             .strip_prefix(template_root)
             .expect("embedded file path must start with the template name");
+        if is_manifest(rel) {
+            continue;
+        }
         let mut rel_str = rel.to_string_lossy().to_string();
         if let Some(stripped) = rel_str.strip_suffix(".hbs") {
             rel_str = stripped.to_string();
@@ -567,6 +722,8 @@ fn render_dir(dir: &Dir<'_>, template_root: &str, dest: &Path, vars: &Vars) -> R
             .path()
             .strip_prefix(template_root)
             .expect("embedded file path must start with the template name");
+        if is_manifest(rel) {
+            continue; // template.toml configures generation; it is not output
         // Metadata, not project content: never copied into the generated project.
         if rel == Path::new(MANIFEST_FILE_NAME) {
             continue;
@@ -740,7 +897,14 @@ impl ForgePlugin for ScaffoldPlugin {
                 Arg::new("force")
                     .long("force")
                     .action(ArgAction::SetTrue)
-                    .help("Overwrite the target directory if it exists"),
+                    .help("Overwrite the target directory if it exists (asks for confirmation; pass --yes to skip it)"),
+            )
+            .arg(
+                Arg::new("var")
+                    .long("var")
+                    .action(ArgAction::Append)
+                    .value_name("NAME=VALUE")
+                    .help("Value for a variable declared in the template's template.toml (repeatable); missing ones are prompted for in a terminal"),
             )
             .arg(
                 Arg::new("workspace")
@@ -801,7 +965,13 @@ impl ForgePlugin for ScaffoldPlugin {
         let dest = parent.join(name);
 
         let force = matches.get_flag("force");
-        let vars = project_vars(name, &author, &edition);
+        let supplied = manifest::parse_var_assignments(
+            matches
+                .get_many::<String>("var")
+                .map(|vals| vals.map(String::as_str).collect::<Vec<_>>())
+                .unwrap_or_default(),
+        )?;
+        let mut vars = project_vars(name, &author, &edition);
 
         // --workspace: scaffold a multi-contract Cargo workspace.
         if matches.get_flag("workspace") {
@@ -826,6 +996,10 @@ impl ForgePlugin for ScaffoldPlugin {
                     println!("  {}/contracts/{}/src/test.rs", name, contract_name);
                 }
                 return Ok(());
+            }
+
+            if force {
+                confirm_overwrite(&dest, ctx)?;
             }
 
             log::debug!(
@@ -865,7 +1039,10 @@ impl ForgePlugin for ScaffoldPlugin {
         // --from takes precedence over --template: clone a remote repo.
         if let Some(url) = matches.get_one::<String>("from") {
             if dry_run {
-                println!("dry-run: planned project `{name}` from remote `{url}` at {}", dest.display());
+                println!(
+                    "dry-run: planned project `{name}` from remote `{url}` at {}",
+                    dest.display()
+                );
                 println!("  {}/  (contents depend on remote repository)", name);
                 println!("  {}/forge.toml", name);
                 return Ok(());
@@ -878,11 +1055,21 @@ impl ForgePlugin for ScaffoldPlugin {
                 ));
             }
 
+            if force {
+                confirm_overwrite(&dest, ctx)?;
+            }
+
             log::debug!(
                 "scaffolding `{name}` from remote URL `{url}` into {}",
                 dest.display()
             );
-            generate_from_url(url, &dest, &vars, force)?;
+            // The remote template's variables are only knowable after the
+            // clone, so they are resolved from inside generate_from_url_with.
+            generate_from_url_with(url, &dest, &vars, force, &mut |manifest| {
+                let mut extra = Vars::new();
+                merge_template_vars(manifest.as_ref(), &supplied, ctx, &mut extra)?;
+                Ok(extra)
+            })?;
 
             if !matches.get_flag("no-git") {
                 if let Err(err) = init_git(&dest) {
@@ -925,7 +1112,10 @@ impl ForgePlugin for ScaffoldPlugin {
             .unwrap_or_else(|| DEFAULT_TEMPLATE.to_string());
 
         if dry_run {
-            println!("dry-run: planned project `{name}` from template `{template}` at {}", dest.display());
+            println!(
+                "dry-run: planned project `{name}` from template `{template}` at {}",
+                dest.display()
+            );
             // Show planned file tree using the embedded template listing.
             if let Some(template_dir) = TEMPLATES.get_dir(template.as_str()) {
                 print_dry_run_tree(template_dir, &template, name);
@@ -934,6 +1124,13 @@ impl ForgePlugin for ScaffoldPlugin {
             return Ok(());
         }
 
+        // Fill in whatever the template declares in its template.toml.
+        let template_manifest = bundled_manifest(&template)?;
+        merge_template_vars(template_manifest.as_ref(), &supplied, ctx, &mut vars)?;
+
+        if force {
+            confirm_overwrite(&dest, ctx)?;
+        }
         let manifest = load_manifest(&template)?;
         let overrides = parse_var_overrides(
             &matches
@@ -1060,6 +1257,8 @@ default = "MYT"
                 "escrow",
                 "governance",
                 "hello-world",
+                "multisig",
+                "nft",
                 "merkle-airdrop",
                 "multisig",
                 "nft",
@@ -1108,6 +1307,8 @@ default = "MYT"
                 "escrow",
                 "governance",
                 "hello-world",
+                "multisig",
+                "nft",
                 "merkle-airdrop",
                 "multisig",
                 "nft",
@@ -1534,6 +1735,102 @@ default = "MYT"
             err.contains("could not clone") || err.contains("git clone failed"),
             "error message should describe the clone failure, got: {err}"
         );
+    }
+
+    // ── template.toml / --var ─────────────────────────────────────────────
+
+    #[test]
+    fn var_flag_is_repeatable() {
+        let matches = ScaffoldPlugin
+            .command()
+            .try_get_matches_from(vec![
+                "new",
+                "demo",
+                "--var",
+                "symbol=TKN",
+                "--var",
+                "supply=100",
+            ])
+            .unwrap();
+        let vars: Vec<&String> = matches.get_many::<String>("var").unwrap().collect();
+        assert_eq!(vars, vec!["symbol=TKN", "supply=100"]);
+    }
+
+    #[test]
+    fn bundled_templates_without_a_manifest_report_none() {
+        for template in available_templates() {
+            assert_eq!(
+                bundled_manifest(template).unwrap(),
+                None,
+                "template `{template}` unexpectedly ships a {}",
+                manifest::MANIFEST_FILE
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_template_has_no_manifest() {
+        assert_eq!(bundled_manifest("does-not-exist").unwrap(), None);
+    }
+
+    #[test]
+    fn reads_a_manifest_from_a_template_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join(manifest::MANIFEST_FILE),
+            "[[variables]]\nname = \"symbol\"\ndefault = \"TKN\"\n",
+        )
+        .unwrap();
+        let manifest = manifest_in_dir(dir.path()).unwrap().unwrap();
+        assert_eq!(manifest.variables[0].name, "symbol");
+    }
+
+    #[test]
+    fn no_manifest_in_a_directory_without_one() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(manifest_in_dir(dir.path()).unwrap(), None);
+    }
+
+    /// `template.toml` configures generation — it must not land in the project.
+    #[test]
+    fn the_manifest_is_not_copied_into_the_generated_project() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source");
+        let dest = dir.path().join("dest");
+        std::fs::create_dir_all(&source).unwrap();
+        std::fs::write(
+            source.join(manifest::MANIFEST_FILE),
+            "[[variables]]\nname = \"symbol\"\n",
+        )
+        .unwrap();
+        std::fs::write(source.join("README.md"), "# {{project_name}}: {{symbol}}\n").unwrap();
+
+        let vars = Vars::from([
+            ("project_name".to_string(), "demo".to_string()),
+            ("symbol".to_string(), "TKN".to_string()),
+        ]);
+        render_dir_fs(&source, &source, &dest, &vars).unwrap();
+
+        assert!(!dest.join(manifest::MANIFEST_FILE).exists());
+        let readme = std::fs::read_to_string(dest.join("README.md")).unwrap();
+        assert_eq!(readme, "# demo: TKN\n");
+    }
+
+    #[test]
+    fn a_nested_file_named_template_toml_is_still_copied() {
+        // Only the manifest at the template root is special.
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source");
+        let dest = dir.path().join("dest");
+        std::fs::create_dir_all(source.join("nested")).unwrap();
+        std::fs::write(
+            source.join("nested").join(manifest::MANIFEST_FILE),
+            "x = 1\n",
+        )
+        .unwrap();
+
+        render_dir_fs(&source, &source, &dest, &Vars::new()).unwrap();
+        assert!(dest.join("nested").join(manifest::MANIFEST_FILE).is_file());
     }
 
     /// If `git` is not on PATH, generate_from_url returns ToolMissing, not a

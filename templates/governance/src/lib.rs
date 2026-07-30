@@ -44,6 +44,9 @@ impl GovernanceContract {
     /// * `voting_period` — voting window in ledgers (~5 s per ledger on mainnet)
     pub fn initialize(env: Env, admin: Address, quorum: i128, voting_period: u32) {
         admin.require_auth();
+        if env.storage().instance().has(&DataKey::Admin) {
+            panic!("already initialized");
+        }
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage().instance().set(&DataKey::Quorum, &quorum);
         env.storage()

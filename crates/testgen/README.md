@@ -10,11 +10,25 @@ Soroban contract project and it generates
 | `tests/common/mod.rs`  | fixtures: mocked-auth `Env`, account generator, ledger-time control, token (SAC) setup + funding, snapshot assertion helper |
 | `tests/forge_smoke.rs` | smoke test registering the detected `#[contract]` type and constructing its client |
 | `tests/forge_invariant.rs` | proptest-based invariant testing harness asserting state properties across random call sequences |
+| `tests/forge_init_once.rs` | (when an initialize-style entrypoint is detected) asserts a second call to it is rejected |
+| `tests/forge_budget.rs` | (with `--budget`) benchmark measuring one entrypoint's CPU instructions and memory via `env.cost_estimate().budget()`, asserting an upper bound |
 | `fuzz/Cargo.toml`      | (with `--fuzz`) cargo-fuzz workspace manifest |
 | `fuzz/fuzz_targets/fuzz_target_1.rs` | (with `--fuzz`) property-based fuzzer feeding arbitrary values into detected contract methods |
 
 Pass `--prop` (or `--invariant`/`--property`) to `test-init` to generate the
 property-based invariant harness, and `--fuzz` to emit a cargo-fuzz target.
+
+`--budget [ENTRYPOINT]` (alias `--bench`) emits the budget test, measuring the
+named entrypoint or the first one detected. It starts at Soroban's
+per-transaction ceilings (100M CPU instructions, 40 MiB); run
+`cargo test --test forge_budget -- --nocapture` to see the real cost and
+tighten the constants so a regression fails the test.
+
+`tests/forge_init_once.rs` needs no flag: it is written whenever the contract
+exposes an entrypoint named `initialize`, `initialise`, `init` or `setup`. It
+calls the entrypoint, then asserts `try_<entrypoint>` returns `Err` on a second
+call. A failure means the contract has no re-initialization guard — a real
+finding, not a flaky test.
 
 The global `--quiet` flag suppresses the generated-file report and follow-up
 notes without changing which harness files are written.
@@ -41,8 +55,15 @@ fail on change; `FORGE_UPDATE_SNAPSHOTS=1 cargo test` accepts changes.
 
 ```rust
 testgen::generate(dir, force, fuzz) -> Result<(ContractInfo, Vec<&str>)>;
+testgen::generate_with(dir, &GenerateOptions) -> Result<(ContractInfo, Vec<&str>)>;
 testgen::inspect(dir) -> Result<ContractInfo>;
+testgen::build_budget_test(&info, entrypoint) -> Result<String>;
+testgen::build_init_once_test(&info) -> String;
+testgen::detect::detect_init_method(&methods) -> Option<MethodInfo>;
 ```
+
+`GenerateOptions` carries `force`, `fuzz`, `budget` and `budget_entrypoint`;
+`generate` is the two-flag shorthand for it.
 
 ## Tests
 

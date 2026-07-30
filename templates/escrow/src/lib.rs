@@ -51,6 +51,9 @@ impl EscrowContract {
         timeout: u32,
     ) {
         depositor.require_auth();
+        if env.storage().instance().has(&DataKey::Depositor) {
+            panic!("already initialized");
+        }
         env.storage().instance().set(&DataKey::Depositor, &depositor);
         env.storage().instance().set(&DataKey::Recipient, &recipient);
         env.storage().instance().set(&DataKey::Approver, &approver);

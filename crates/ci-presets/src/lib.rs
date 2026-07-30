@@ -3,10 +3,13 @@
 //! `soroban-forge ci-init --provider github` — writes CI/CD workflows for a
 //! Soroban contract project:
 //!
-//! - `build-test.yml`: cargo test + wasm build on push/PR
+//! - `build-test.yml`: cargo test + wasm build on push/PR, plus a lint job
+//!   running `cargo fmt --check` and `cargo clippy -- -D warnings`
 //! - `contract-size.yml`: fails PRs when the built wasm exceeds a limit
 //! - `testnet-deploy.yml` (with `--deploy`): manual testnet deploy wrapping
 //!   the official stellar-cli; references GitHub secrets, never stores keys.
+//! - `.github/dependabot.yml` (with `--dependabot`): weekly cargo and
+//!   github-actions dependency updates.
 //!
 //! Presets live in the repository's top-level `presets/<provider>/` directory
 //! and are embedded at compile time. `{{project_name}}` / `{{crate_name}}`
@@ -33,6 +36,8 @@ const SECURITY_SCAN_WORKFLOW: &str = "security-scan.yml";
 const DENY_TOML: &str = "deny.toml";
 /// Workflow written only with `--healthcheck`.
 const HEALTHCHECK_WORKFLOW: &str = "testnet-healthcheck.yml";
+/// Dependabot config written only with `--dependabot`.
+const DEPENDABOT_CONFIG: &str = "dependabot.yml";
 
 /// Providers with a preset directory, sorted.
 pub fn available_providers() -> Vec<&'static str> {
@@ -91,6 +96,9 @@ pub struct GenerateOptions {
     pub security_scan: bool,
     /// Also write the scheduled testnet health-check workflow.
     pub healthcheck: bool,
+    /// Also write `.github/dependabot.yml` (weekly cargo + github-actions
+    /// updates).
+    pub dependabot: bool,
 }
 
 /// Write the workflows for `provider` into `dir`. Public API behind
@@ -118,10 +126,11 @@ pub fn generate(
     std::fs::create_dir_all(&out_dir)
         .map_err(ForgeError::io(format!("creating {}", out_dir.display())))?;
 
-    // `(preset_filename, output_directory_override)` — None means use `out_dir`.
-    let mut selected: Vec<(&str, Option<&Path>)> = match provider {
+    // `(preset_filename, destination_dir_override)` — the override is relative
+    // to the project root; None means use the provider's `out_dir`.
+    let mut selected: Vec<(&str, Option<&str>)> = match provider {
         "github" => {
-            let mut list: Vec<(&str, Option<&Path>)> =
+            let mut list: Vec<(&str, Option<&str>)> =
                 BASE_WORKFLOWS.iter().map(|n| (*n, None)).collect();
             if opts.deploy {
                 list.push((DEPLOY_WORKFLOW, None));
@@ -129,10 +138,14 @@ pub fn generate(
             if opts.security_scan {
                 list.push((SECURITY_SCAN_WORKFLOW, None));
                 // deny.toml goes at the project root, not in .github/workflows.
-                list.push((DENY_TOML, Some(dir)));
+                list.push((DENY_TOML, Some(".")));
             }
             if opts.healthcheck {
                 list.push((HEALTHCHECK_WORKFLOW, None));
+            }
+            if opts.dependabot {
+                // dependabot.yml lives in .github/, not .github/workflows/.
+                list.push((DEPENDABOT_CONFIG, Some(".github")));
             }
             list
         }
@@ -147,7 +160,7 @@ pub fn generate(
     };
 
     let mut written = Vec::new();
-    for (name, dest_dir_override) in selected.drain(..) {
+    for (name, dest_rel_override) in selected.drain(..) {
         let file = provider_dir
             .get_file(format!("{provider}/{name}"))
             .ok_or_else(|| {
@@ -157,7 +170,10 @@ pub fn generate(
             .contents_utf8()
             .ok_or_else(|| ForgeError::Template(format!("preset {name} is not UTF-8")))?;
 
-        let dest_dir = dest_dir_override.unwrap_or(&out_dir);
+        let dest_rel = dest_rel_override.unwrap_or(out_rel);
+        let dest_dir = dir.join(dest_rel);
+        std::fs::create_dir_all(&dest_dir)
+            .map_err(ForgeError::io(format!("creating {}", dest_dir.display())))?;
         let out_path = dest_dir.join(name);
         if out_path.exists() && !force {
             return Err(ForgeError::AlreadyExists(out_path));
@@ -165,13 +181,10 @@ pub fn generate(
         std::fs::write(&out_path, render_str(contents, &vars))
             .map_err(ForgeError::io(format!("writing {}", out_path.display())))?;
 
-        let rel_path = if dest_dir_override.is_some() {
-            // File written at the project root — use just the filename.
-            name.to_string()
-        } else if out_rel == "." {
+        let rel_path = if dest_rel == "." {
             name.to_string()
         } else {
-            format!("{out_rel}/{name}")
+            format!("{dest_rel}/{name}")
         };
         written.push(rel_path);
     }
@@ -210,6 +223,12 @@ pub fn format_report(
         out.push_str(
             "\nsecurity-scan: review deny.toml at the project root to tune license and\n\
              vulnerability policies. Install locally with: cargo install cargo-audit cargo-deny\n",
+        );
+    }
+    if opts.dependabot {
+        out.push_str(
+            "\ndependabot: weekly update PRs for the cargo and github-actions ecosystems.\n\
+             Enable Dependabot under: repo → Settings → Code security\n",
         );
     }
     if opts.healthcheck {
@@ -257,6 +276,12 @@ impl ForgePlugin for CiPresetsPlugin {
                     .help("Also write the scheduled testnet health-check workflow (GitHub only)"),
             )
             .arg(
+                Arg::new("dependabot")
+                    .long("dependabot")
+                    .action(ArgAction::SetTrue)
+                    .help("Also write .github/dependabot.yml with weekly cargo and github-actions updates (GitHub only)"),
+            )
+            .arg(
                 Arg::new("path")
                     .long("path")
                     .help("Project directory [default: current directory]"),
@@ -280,6 +305,7 @@ impl ForgePlugin for CiPresetsPlugin {
             deploy: matches.get_flag("deploy"),
             security_scan: matches.get_flag("security-scan"),
             healthcheck: matches.get_flag("healthcheck"),
+            dependabot: matches.get_flag("dependabot"),
         };
 
         let written = generate(&dir, provider, &name, &opts, matches.get_flag("force"))?;
@@ -292,6 +318,7 @@ impl ForgePlugin for CiPresetsPlugin {
                 "deploy_enabled": opts.deploy,
                 "security_scan_enabled": opts.security_scan,
                 "healthcheck_enabled": opts.healthcheck,
+                "dependabot_enabled": opts.dependabot,
             });
             println!("{}", serde_json::to_string_pretty(&report).unwrap());
         } else if !ctx.quiet {
@@ -428,6 +455,48 @@ mod tests {
         let deny = std::fs::read_to_string(dir.path().join("deny.toml")).unwrap();
         assert!(deny.contains("[advisories]"), "{deny}");
         assert!(deny.contains("[licenses]"), "{deny}");
+    }
+
+    #[test]
+    fn build_test_workflow_has_lint_job() {
+        let dir = tempfile::tempdir().unwrap();
+        generate(dir.path(), "github", "demo", &base_opts(), false).unwrap();
+        let build =
+            std::fs::read_to_string(dir.path().join(".github/workflows/build-test.yml")).unwrap();
+        assert!(build.contains("demo: lint (rustfmt + clippy)"), "{build}");
+        assert!(build.contains("components: rustfmt, clippy"), "{build}");
+        assert!(build.contains("cargo fmt --all --check"), "{build}");
+        assert!(
+            build.contains("cargo clippy --all-targets -- -D warnings"),
+            "{build}"
+        );
+    }
+
+    #[test]
+    fn dependabot_config_written_to_dot_github() {
+        let dir = tempfile::tempdir().unwrap();
+        let opts = GenerateOptions { dependabot: true, ..Default::default() };
+        let written = generate(dir.path(), "github", "demo", &opts, false).unwrap();
+        assert!(
+            written.iter().any(|p| p == ".github/dependabot.yml"),
+            "{written:?}"
+        );
+        let raw = std::fs::read_to_string(dir.path().join(".github/dependabot.yml")).unwrap();
+        // Schema version, both required ecosystems, and a weekly schedule for
+        // each of them.
+        assert!(raw.contains("version: 2"), "{raw}");
+        assert!(raw.contains("package-ecosystem: cargo"), "{raw}");
+        assert!(raw.contains("package-ecosystem: github-actions"), "{raw}");
+        assert_eq!(raw.matches("interval: weekly").count(), 2, "{raw}");
+        assert!(raw.contains("demo"), "{raw}");
+        assert!(!raw.contains("{{project_name}}"), "{raw}");
+    }
+
+    #[test]
+    fn dependabot_omitted_by_default() {
+        let dir = tempfile::tempdir().unwrap();
+        generate(dir.path(), "github", "demo", &base_opts(), false).unwrap();
+        assert!(!dir.path().join(".github/dependabot.yml").exists());
     }
 
     #[test]

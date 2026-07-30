@@ -20,7 +20,9 @@ Global options may appear before or after a subcommand and can be combined.
   scaffolding.
 - `soroban-forge templates` — list all bundled contract templates with descriptions.
 - `soroban-forge test-init` — generate a test harness.
-- `soroban-forge ci-init --provider github` — generate CI workflows.
+- `soroban-forge ci-init --provider github [--dependabot]` — generate CI
+  workflows (build+test and a rustfmt/clippy lint job); `--dependabot` also
+  writes `.github/dependabot.yml` for weekly cargo and github-actions updates.
 - `soroban-forge doctor [--json]` — check the local Soroban toolchain (optionally emitting machine-readable JSON).
 - `soroban-forge bindings ts` — generate a TypeScript client package from the built contract wasm.
 - `soroban-forge verify <contract-id> [--network <n>]` — compare a deployed

@@ -5,17 +5,29 @@
 - `--quiet`, `-q` — suppress informational command output; errors and exit
   codes are unchanged.
 - `--verbose`, `-v` — enable debug logging.
+- `--log-file <path>` — also write JSON-lines structured logs to a file while
+  preserving normal terminal output.
+- `--offline` — prohibit network access. Network-dependent operations fail with
+  a clear message, while `doctor` skips its connectivity probe.
 
 Global options may appear before or after a subcommand and can be combined.
 
 ## Commands
 
 - `soroban-forge new <name> --template <t>` — create a contract project.
+- `soroban-forge init [--tests] [--ci]` — add `forge.toml` to an existing
+  contract without replacing project files; optionally add test and CI
+  scaffolding.
 - `soroban-forge templates` — list all bundled contract templates with descriptions.
 - `soroban-forge test-init` — generate a test harness.
 - `soroban-forge ci-init --provider github` — generate CI workflows.
 - `soroban-forge doctor [--json]` — check the local Soroban toolchain (optionally emitting machine-readable JSON).
 - `soroban-forge bindings ts` — generate a TypeScript client package from the built contract wasm.
+- `soroban-forge spec [--path <dir>] [--wasm <path>]` — print the built
+  contract's interface: every entrypoint with its argument and return types,
+  plus the types those signatures refer to. Reads the spec out of the wasm, so
+  run `stellar contract build` first; `--json` emits the machine-readable spec.
+  Works under `--offline`.
 - `soroban-forge verify <contract-id> [--network <n>]` — compare a deployed
   contract's wasm hash with the local release build; exits `1` on a mismatch.
   See [Contract Verification](contract-verification.md).

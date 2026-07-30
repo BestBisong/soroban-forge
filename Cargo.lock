@@ -1015,7 +1015,9 @@ dependencies = [
  "soroban-forge-core",
  "soroban-forge-doctor",
  "soroban-forge-identity",
+ "soroban-forge-init",
  "soroban-forge-scaffold",
+ "soroban-forge-spec",
  "soroban-forge-templates",
  "soroban-forge-testgen",
  "soroban-forge-verify",
@@ -1095,6 +1097,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "soroban-forge-init"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "log",
+ "serde",
+ "serde_json",
+ "soroban-forge-ci-presets",
+ "soroban-forge-core",
+ "soroban-forge-testgen",
+ "tempfile",
+ "toml",
+]
+
+[[package]]
 name = "soroban-forge-scaffold"
 version = "0.1.0"
 dependencies = [
@@ -1105,6 +1122,20 @@ dependencies = [
  "serde_json",
  "soroban-forge-core",
  "tempfile",
+ "toml",
+]
+
+[[package]]
+name = "soroban-forge-spec"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "log",
+ "serde",
+ "serde_json",
+ "soroban-forge-core",
+ "tempfile",
+ "toml",
 ]
 
 [[package]]

@@ -1,0 +1,13 @@
+[package]
+name = "soroban-forge-invoke"
+description = "Invoke a function on a deployed Soroban contract via stellar-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+soroban-forge-core.workspace = true
+clap.workspace = true
+log.workspace = true

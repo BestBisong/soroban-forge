@@ -7,7 +7,9 @@
 //! - Rust toolchain (`rustc`, `cargo`) at the minimum supported version
 //! - the `wasm32v1-none` compilation target
 //! - the official `stellar` CLI
-//! - `git` (recommended, not required)
+//! - `git` (recommended, not required), and its `user.name`/`user.email`
+//!   identity, without which the first commit in a new project fails
+//! - Docker (optional, used for reproducible wasm builds)
 //! - when run inside a contract project: the project's `soroban-sdk`
 //!   version, compared against the version pinned into new projects
 //!   (`soroban_forge_scaffold::SOROBAN_SDK_VERSION`)
@@ -194,6 +196,101 @@ pub fn sdk_version_check(project_dir: &Path) -> Option<Check> {
             },
         },
     })
+}
+
+/// Classify a `docker --version` / `docker info` probe into a report line
+/// (issue #70).
+///
+/// Docker is optional: reproducible Soroban wasm builds commonly use it, but
+/// local development does not need it, so an absent or stopped daemon is a
+/// [`Status::Warn`], never a [`Status::Fail`].
+///
+/// `version_line` is the first line of `docker --version` (`None` when the
+/// binary is missing); `daemon_running` is whether `docker info` succeeded.
+pub fn classify_docker(version_line: Option<&str>, daemon_running: bool) -> Check {
+    match version_line {
+        Some(line) if daemon_running => Check {
+            name: "docker",
+            status: Status::Pass,
+            detail: format!("{line} (daemon running)"),
+            fix: None,
+        },
+        Some(line) => Check {
+            name: "docker",
+            status: Status::Warn,
+            detail: format!("{line} — installed but the daemon is not responding"),
+            fix: Some(
+                "start Docker (open Docker Desktop, or: sudo systemctl start docker) \
+                 — only needed for reproducible wasm builds",
+            ),
+        },
+        None => Check {
+            name: "docker",
+            status: Status::Warn,
+            detail: "not found (optional — used for reproducible wasm builds)".into(),
+            fix: Some("install Docker: https://docs.docker.com/get-docker/"),
+        },
+    }
+}
+
+/// Report whether Docker is installed and its daemon is reachable.
+///
+/// Thin system-touching wrapper around [`classify_docker`].
+pub fn docker_check() -> Check {
+    let version_line = capture("docker", &["--version"]);
+    // `docker info` fails fast when the daemon is not reachable; the format
+    // string keeps output to a single short line.
+    let daemon_running = version_line.is_some()
+        && std::process::Command::new("docker")
+            .args(["info", "--format", "{{.ServerVersion}}"])
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+    classify_docker(version_line.as_deref(), daemon_running)
+}
+
+/// Classify a git identity probe into a report line (issue #71).
+///
+/// `new` initializes a git repo, and the first commit fails confusingly when
+/// `user.name`/`user.email` are unset — so a missing identity is a
+/// [`Status::Warn`] carrying the exact commands to set it.
+pub fn classify_git_identity(name: Option<&str>, email: Option<&str>) -> Check {
+    let name = name.map(str::trim).filter(|s| !s.is_empty());
+    let email = email.map(str::trim).filter(|s| !s.is_empty());
+    match (name, email) {
+        (Some(name), Some(email)) => Check {
+            name: "git identity",
+            status: Status::Pass,
+            detail: format!("{name} <{email}>"),
+            fix: None,
+        },
+        (name, email) => {
+            let missing = match (name.is_some(), email.is_some()) {
+                (false, false) => "user.name and user.email are not set",
+                (true, false) => "user.email is not set",
+                (false, true) => "user.name is not set",
+                (true, true) => unreachable!("both set is handled above"),
+            };
+            Check {
+                name: "git identity",
+                status: Status::Warn,
+                detail: missing.to_string(),
+                fix: Some(
+                    "git config --global user.name \"Your Name\"  &&  \
+                     git config --global user.email \"you@example.com\"",
+                ),
+            }
+        }
+    }
+}
+
+/// Report whether git's committer identity is configured.
+///
+/// Thin system-touching wrapper around [`classify_git_identity`].
+pub fn git_identity_check() -> Check {
+    let name = capture("git", &["config", "--get", "user.name"]);
+    let email = capture("git", &["config", "--get", "user.email"]);
+    classify_git_identity(name.as_deref(), email.as_deref())
 }
 
 /// Check whether `url` is reachable with an HTTP GET, returning latency in ms.
@@ -522,11 +619,12 @@ pub fn run_checks_with_network(allow_network: bool) -> Vec<Check> {
     }
 
     // git — recommended only.
-    checks.push(match capture("git", &["--version"]) {
+    let git_version = capture("git", &["--version"]);
+    checks.push(match &git_version {
         Some(line) => Check {
             name: "git",
             status: Status::Pass,
-            detail: line,
+            detail: line.clone(),
             fix: None,
         },
         None => Check {
@@ -536,6 +634,14 @@ pub fn run_checks_with_network(allow_network: bool) -> Vec<Check> {
             fix: Some("install git: https://git-scm.com/downloads"),
         },
     });
+
+    // git committer identity (issue #71) — only meaningful when git exists.
+    if git_version.is_some() {
+        checks.push(git_identity_check());
+    }
+
+    // Docker (issue #70) — optional, used for reproducible wasm builds.
+    checks.push(docker_check());
 
     checks
 }
@@ -1102,6 +1208,77 @@ mod tests {
         assert_eq!(parsed[1]["name"], "stellar-cli");
         assert_eq!(parsed[1]["status"], "fail");
         assert_eq!(parsed[1]["fix"], "install: brew install stellar-cli");
+    }
+
+    // ---- docker (issue #70) ----
+
+    #[test]
+    fn docker_present_and_running_passes() {
+        let check = classify_docker(Some("Docker version 27.3.1, build ce12230"), true);
+        assert_eq!(check.status, Status::Pass);
+        assert!(check.detail.contains("27.3.1"));
+        assert!(check.fix.is_none());
+    }
+
+    #[test]
+    fn docker_installed_but_daemon_down_warns() {
+        let check = classify_docker(Some("Docker version 27.3.1"), false);
+        assert_eq!(check.status, Status::Warn);
+        assert!(check.detail.contains("daemon is not responding"));
+        assert!(check.fix.unwrap().contains("start Docker"));
+    }
+
+    #[test]
+    fn docker_absent_warns_without_failing() {
+        let check = classify_docker(None, false);
+        assert_eq!(check.status, Status::Warn);
+        assert_eq!(failure_count(&[check.clone()]), 0);
+        assert!(check.detail.contains("not found"));
+        assert!(check.fix.unwrap().contains("docs.docker.com"));
+    }
+
+    // ---- git identity (issue #71) ----
+
+    #[test]
+    fn git_identity_set_passes() {
+        let check = classify_git_identity(Some("Ada Lovelace"), Some("ada@example.com"));
+        assert_eq!(check.status, Status::Pass);
+        assert_eq!(check.detail, "Ada Lovelace <ada@example.com>");
+        assert!(check.fix.is_none());
+    }
+
+    #[test]
+    fn git_identity_missing_warns_with_commands() {
+        let check = classify_git_identity(None, None);
+        assert_eq!(check.status, Status::Warn);
+        assert!(check.detail.contains("user.name and user.email"));
+        let fix = check.fix.unwrap();
+        assert!(fix.contains("git config --global user.name"));
+        assert!(fix.contains("git config --global user.email"));
+    }
+
+    #[test]
+    fn git_identity_reports_which_half_is_missing() {
+        let no_email = classify_git_identity(Some("Ada"), None);
+        assert_eq!(no_email.status, Status::Warn);
+        assert_eq!(no_email.detail, "user.email is not set");
+
+        let no_name = classify_git_identity(None, Some("ada@example.com"));
+        assert_eq!(no_name.detail, "user.name is not set");
+    }
+
+    #[test]
+    fn blank_git_identity_counts_as_unset() {
+        let check = classify_git_identity(Some("  "), Some(""));
+        assert_eq!(check.status, Status::Warn);
+        assert!(check.detail.contains("user.name and user.email"));
+    }
+
+    #[test]
+    fn docker_and_git_identity_are_not_auto_fixable() {
+        for name in ["docker", "git identity"] {
+            assert!(remedy(&fail(name)).is_none(), "{name}");
+        }
     }
 
     // ---- auto-fix (`--fix`) ----

@@ -1,3 +1,13 @@
+## Optional checks
+
+Two checks report on things that are useful but not required, so they warn
+instead of failing:
+
+| check          | warns when                                          |
+|----------------|-----------------------------------------------------|
+| `docker`       | Docker is absent, or installed with its daemon down — reproducible wasm builds commonly use it |
+| `git identity` | `git config user.name` or `user.email` is unset — commits in a freshly created project fail confusingly without them |
+
 ## Auto-fixing (`--fix`)
 
 `soroban-forge doctor --fix` runs the remedies doctor would otherwise only

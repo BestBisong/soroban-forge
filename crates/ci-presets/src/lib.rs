@@ -10,6 +10,9 @@
 //!   the official stellar-cli; references GitHub secrets, never stores keys.
 //! - `.github/dependabot.yml` (with `--dependabot`): weekly cargo and
 //!   github-actions dependency updates.
+//! - `release.yml` (with `--release`): tag-triggered (`v*.*.*`) build that
+//!   attaches the contract wasm and a SHA256 checksum to a GitHub Release,
+//!   after verifying the build is reproducible (same source, same hash).
 //!
 //! Presets live in the repository's top-level `presets/<provider>/` directory
 //! and are embedded at compile time. `{{project_name}}` / `{{crate_name}}`
@@ -30,6 +33,8 @@ static PRESETS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../../presets");
 const BASE_WORKFLOWS: &[&str] = &["build-test.yml", "contract-size.yml"];
 /// Workflow written only with `--deploy`.
 const DEPLOY_WORKFLOW: &str = "testnet-deploy.yml";
+/// Workflow written only with `--release`.
+const RELEASE_WORKFLOW: &str = "release.yml";
 /// Workflow written only with `--security-scan`.
 const SECURITY_SCAN_WORKFLOW: &str = "security-scan.yml";
 /// Deny config scaffolded alongside `--security-scan`.
@@ -107,6 +112,8 @@ pub fn generate(
     dir: &Path,
     provider: &str,
     project_name: &str,
+    deploy: bool,
+    release: bool,
     opts: &GenerateOptions,
     force: bool,
 ) -> Result<Vec<String>> {
@@ -237,6 +244,13 @@ pub fn format_report(
              Edit testnet-healthcheck.yml to invoke your contract's real health method.\n",
         );
     }
+    if release {
+        out.push_str("\npush a tag matching `v*.*.*` (e.g. `v0.1.0`) to build the wasm,\n");
+        out.push_str("verify the build is reproducible, and publish it to a GitHub Release\n");
+        out.push_str(
+            "with a SHA256 checksum. Uses the default GITHUB_TOKEN — no secrets needed.\n",
+        );
+    }
     out
 }
 
@@ -280,6 +294,10 @@ impl ForgePlugin for CiPresetsPlugin {
                     .long("dependabot")
                     .action(ArgAction::SetTrue)
                     .help("Also write .github/dependabot.yml with weekly cargo and github-actions updates (GitHub only)"),
+                Arg::new("release")
+                    .long("release")
+                    .action(ArgAction::SetTrue)
+                    .help("Also write a tag-triggered (v*.*.*) release workflow: builds the wasm, verifies it's reproducible, and attaches it (with a checksum) to a GitHub Release"),
             )
             .arg(
                 Arg::new("path")
@@ -371,6 +389,20 @@ mod tests {
     }
 
     #[test]
+    fn release_report_explains_tag_trigger() {
+        let report = format_report("github", "demo", &["release.yml"], false, true);
+        assert!(report.contains("v*.*.*"));
+        assert!(report.contains("GitHub Release"));
+        assert!(!report.contains("STELLAR_DEPLOYER_SECRET"));
+    }
+
+    #[test]
+    fn base_report_omits_release_guidance() {
+        let report = format_report("github", "demo", &["build.yml"], false, false);
+        assert!(!report.contains("v*.*.*"));
+    }
+
+    #[test]
     fn unknown_provider_error_lists_available() {
         let dir = tempfile::tempdir().unwrap();
         let err = generate(dir.path(), "unknown", "demo", &base_opts(), false).unwrap_err();
@@ -397,6 +429,7 @@ mod tests {
             .path()
             .join(".github/workflows/testnet-deploy.yml")
             .exists());
+        assert!(!dir.path().join(".github/workflows/release.yml").exists());
     }
 
     #[test]

@@ -1,0 +1,126 @@
+extern crate std;
+
+use super::*;
+use soroban_sdk::testutils::Address as _;
+use soroban_sdk::{testutils::Ledger, Address, Bytes, BytesN, Env};
+
+fn commit(env: &Env, nonce: &BytesN<32>) -> BytesN<32> {
+    let bytes: Bytes = nonce.clone().into();
+    env.crypto().sha256(&bytes).to_bytes()
+}
+
+fn setup(env: &Env) -> (LotteryContractClient<'_>, Address, u64, u64) {
+    env.mock_all_auths();
+
+    let start_ts = 1_000_000;
+    env.ledger().with_mut(|li| li.timestamp = start_ts);
+
+    let admin = Address::generate(env);
+    let commit_deadline = start_ts + 1000;
+    let reveal_deadline = start_ts + 2000;
+
+    let contract_id = env.register(LotteryContract, ());
+    let contract = LotteryContractClient::new(env, &contract_id);
+    contract.initialize(&admin, &commit_deadline, &reveal_deadline);
+
+    (contract, admin, commit_deadline, reveal_deadline)
+}
+
+#[test]
+fn entry_reveal_and_draw_picks_a_revealed_winner() {
+    let env = Env::default();
+    let (contract, _admin, commit_deadline, reveal_deadline) = setup(&env);
+
+    let alice = Address::generate(&env);
+    let bob = Address::generate(&env);
+    let carol = Address::generate(&env);
+
+    let nonce_a = BytesN::from_array(&env, &[1_u8; 32]);
+    let nonce_b = BytesN::from_array(&env, &[2_u8; 32]);
+    let nonce_c = BytesN::from_array(&env, &[3_u8; 32]);
+
+    contract.enter(&alice, &commit(&env, &nonce_a));
+    contract.enter(&bob, &commit(&env, &nonce_b));
+    contract.enter(&carol, &commit(&env, &nonce_c));
+
+    // Move into the reveal window.
+    env.ledger().with_mut(|li| li.timestamp = commit_deadline);
+    contract.reveal(&alice, &nonce_a);
+    contract.reveal(&bob, &nonce_b);
+    contract.reveal(&carol, &nonce_c);
+
+    // Move past the reveal deadline and draw.
+    env.ledger().with_mut(|li| li.timestamp = reveal_deadline);
+    let winner = contract.draw();
+
+    assert!(winner == alice || winner == bob || winner == carol);
+    assert_eq!(contract.get_winner(), winner);
+}
+
+#[test]
+fn non_revealed_entrants_are_excluded_from_the_draw() {
+    let env = Env::default();
+    let (contract, _admin, commit_deadline, reveal_deadline) = setup(&env);
+
+    let alice = Address::generate(&env);
+    let bob = Address::generate(&env);
+
+    let nonce_a = BytesN::from_array(&env, &[1_u8; 32]);
+    let nonce_b = BytesN::from_array(&env, &[2_u8; 32]);
+
+    contract.enter(&alice, &commit(&env, &nonce_a));
+    contract.enter(&bob, &commit(&env, &nonce_b));
+
+    env.ledger().with_mut(|li| li.timestamp = commit_deadline);
+    // Only alice reveals; bob forfeits.
+    contract.reveal(&alice, &nonce_a);
+
+    env.ledger().with_mut(|li| li.timestamp = reveal_deadline);
+    let winner = contract.draw();
+
+    assert_eq!(winner, alice);
+}
+
+#[test]
+#[should_panic(expected = "nonce does not match commitment")]
+fn reveal_with_wrong_nonce_fails() {
+    let env = Env::default();
+    let (contract, _admin, commit_deadline, _reveal_deadline) = setup(&env);
+
+    let alice = Address::generate(&env);
+    let nonce_a = BytesN::from_array(&env, &[1_u8; 32]);
+    let wrong_nonce = BytesN::from_array(&env, &[9_u8; 32]);
+
+    contract.enter(&alice, &commit(&env, &nonce_a));
+
+    env.ledger().with_mut(|li| li.timestamp = commit_deadline);
+    contract.reveal(&alice, &wrong_nonce);
+}
+
+#[test]
+#[should_panic(expected = "no valid reveals")]
+fn draw_without_reveals_fails() {
+    let env = Env::default();
+    let (contract, _admin, commit_deadline, reveal_deadline) = setup(&env);
+
+    let alice = Address::generate(&env);
+    let nonce_a = BytesN::from_array(&env, &[1_u8; 32]);
+    contract.enter(&alice, &commit(&env, &nonce_a));
+
+    let _ = commit_deadline;
+    env.ledger().with_mut(|li| li.timestamp = reveal_deadline);
+    contract.draw();
+}
+
+#[test]
+#[should_panic(expected = "commit phase has ended")]
+fn enter_after_commit_deadline_fails() {
+    let env = Env::default();
+    let (contract, _admin, commit_deadline, _reveal_deadline) = setup(&env);
+
+    let alice = Address::generate(&env);
+    let nonce_a = BytesN::from_array(&env, &[1_u8; 32]);
+
+    env.ledger().with_mut(|li| li.timestamp = commit_deadline);
+    contract.enter(&alice, &commit(&env, &nonce_a));
+}

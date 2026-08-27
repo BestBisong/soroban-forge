@@ -1,4 +1,4 @@
-//! Initialize soroban-forge in an existing contract project.
+﻿//! Initialize soroban-forge in an existing contract project.
 
 use std::path::Path;
 
@@ -138,6 +138,8 @@ impl ForgePlugin for InitPlugin {
                 &dir,
                 "github",
                 &project.name,
+                false,
+                false,
                 &GenerateOptions::default(),
                 false,
             )?;
@@ -204,3 +206,4 @@ mod tests {
         );
     }
 }
+

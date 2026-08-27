@@ -1,37 +1,14 @@
-# forge.config.ts
+# Configuration
 
-Full schema reference for the Soroban Forge configuration file.
+## Global Flags
 
-```typescript
-import { defineConfig } from 'soroban-forge';
+| Flag | Env Variable | Default | Description |
+|------|-------------|---------|-------------|
+| `--verbose` | `SOROBAN_FORGE_VERBOSE` | `false` | Debug logging |
+| `--quiet` | `SOROBAN_FORGE_QUIET` | `false` | Suppress output |
+| `--json` | `SOROBAN_FORGE_JSON` | `false` | JSON output |
+| `--yes`/`-y` | `SOROBAN_FORGE_YES` | `false` | Auto-confirm |
+| `--cwd`/`-C` | — | cwd | Run from DIR |
+| `--offline` | `SOROBAN_FORGE_OFFLINE` | `false` | No network |
 
-export default defineConfig({
-  // Network to target when no --network flag is passed
-  defaultNetwork: 'testnet',
-
-  // Named network presets
-  networks: {
-    testnet: {
-      rpcUrl: 'https://soroban-testnet.stellar.org',
-      passphrase: 'Test SDF Network ; September 2015',
-    },
-    mainnet: {
-      rpcUrl: 'https://horizon.stellar.org',
-      passphrase: 'Public Global Stellar Network ; September 2015',
-    },
-  },
-
-  // Contracts to build / deploy
-  contracts: [
-    { name: 'distribution', path: 'contracts/distribution' },
-    { name: 'token',        path: 'contracts/token' },
-  ],
-
-  // Compiler settings
-  compiler: {
-    optimise: true,       // -C opt-level=z
-    lto: true,            // link-time optimisation
-    panicAbort: true,     // abort on panic (no unwinding)
-  },
-});
-```
+Precedence: CLI flag > env var > forge.toml > default.

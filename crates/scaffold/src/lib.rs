@@ -646,6 +646,7 @@ fn render_dir_fs(dir: &Path, source_root: &Path, dest: &Path, vars: &Vars) -> Re
                 .expect("path must be under source_root");
             if is_manifest(rel) {
                 continue; // template.toml configures generation; it is not output
+        }
             }
 
             // Apply variable substitution to the relative path (including each
@@ -684,7 +685,6 @@ fn render_dir_fs(dir: &Path, source_root: &Path, dest: &Path, vars: &Vars) -> Re
         }
     }
     Ok(())
-}
 
 /// True for the template's own `template.toml`, which lives at the root of a
 /// template and drives generation rather than being part of the output.
@@ -725,6 +725,7 @@ fn render_dir(dir: &Dir<'_>, template_root: &str, dest: &Path, vars: &Vars) -> R
             .expect("embedded file path must start with the template name");
         if is_manifest(rel) {
             continue; // template.toml configures generation; it is not output
+        }
         // Metadata, not project content: never copied into the generated project.
         if rel == Path::new(MANIFEST_FILE_NAME) {
             continue;
@@ -1246,7 +1247,6 @@ default = "MYT"
         assert_eq!(names, vec!["token_name", "token_symbol", "token_decimals"]);
     }
 
-    #[test]
     fn lists_all_three_templates() {
     fn lists_all_bundled_templates() {
         assert_eq!(

@@ -15,6 +15,29 @@ use crate::error::{ForgeError, Result};
 use crate::plugin::{ForgeContext, ForgePlugin};
 
 
+/// Levenshtein edit distance.
+pub fn edit_distance(a: &str, b: &str) -> usize {
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+    let (m, n) = (a.len(), b.len());
+    let mut dp = vec![vec![0usize; n + 1]; m + 1];
+    for i in 0..=m { dp[i][0] = i; }
+    for j in 0..=n { dp[0][j] = j; }
+    for i in 1..=m {
+        for j in 1..=n {
+            let cost = if a[i-1] == b[j-1] { 0 } else { 1 };
+            dp[i][j] = (dp[i-1][j]+1).min(dp[i][j-1]+1).min(dp[i-1][j-1]+cost);
+        }
+    }
+    dp[m][n]
+}
+pub fn closest_match<'a>(input: &str, candidates: &[&'a str], threshold: usize) -> Option<&'a str> {
+    candidates.iter().map(|c| (*c, edit_distance(input, c))).filter(|(_, d)| *d <= threshold).min_by_key(|(_, d)| *d).map(|(c, _)| c)
+}
+pub fn env_flag(name: &str) -> bool {
+    std::env::var(name).map(|v| matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes")).unwrap_or(false)
+}
+
 /// Build the top-level `soroban-forge` command from the registered plugins.
 pub fn build_command(plugins: &[Box<dyn ForgePlugin>]) -> Command {
     let mut cmd = Command::new("soroban-forge")
@@ -71,6 +94,14 @@ pub fn build_command(plugins: &[Box<dyn ForgePlugin>]) -> Command {
                 .help("Also write structured JSON logs to PATH"),
         )
         .arg(
+            Arg::new("cwd")
+                .long("cwd")
+                .short('C')
+                .global(true)
+                .value_name("DIR")
+                .help("Run as if started in DIR"),
+        )
+        .arg(
             Arg::new("offline")
                 .long("offline")
                 .global(true)
@@ -96,19 +127,26 @@ pub fn build_command(plugins: &[Box<dyn ForgePlugin>]) -> Command {
 
 /// Route parsed matches to the owning plugin or an external subcommand.
 pub fn dispatch(plugins: &[Box<dyn ForgePlugin>], matches: &ArgMatches) -> Result<()> {
-    let verbose = matches.get_count("verbose");
-    let quiet = matches.get_flag("quiet");
-    let json = matches.get_flag("json");
-    let yes = matches.get_flag("yes");
-    let offline = matches.get_flag("offline");
+    let verbose = matches.get_count("verbose").max(if env_flag("SOROBAN_FORGE_VERBOSE") { 1 } else { 0 });
+    let quiet = matches.get_flag("quiet") || env_flag("SOROBAN_FORGE_QUIET");
+    let json = matches.get_flag("json") || env_flag("SOROBAN_FORGE_JSON");
+    let yes = matches.get_flag("yes") || env_flag("SOROBAN_FORGE_YES");
+    let offline = matches.get_flag("offline") || env_flag("SOROBAN_FORGE_OFFLINE");
     let (name, sub_matches) = matches
         .subcommand()
         .ok_or_else(|| ForgeError::InvalidArgument("a subcommand is required".into()))?;
 
     // Try a built-in plugin first.
     if let Some(plugin) = plugins.iter().find(|p| p.name() == name) {
-        let cwd =
-            std::env::current_dir().map_err(ForgeError::io("determining current directory"))?;
+        let cwd = if let Some(dir) = matches.get_one::<String>("cwd") {
+            let path = std::path::PathBuf::from(dir);
+            if !path.is_dir() {
+                return Err(ForgeError::InvalidArgument(format!("--cwd path `{}` is not a directory", path.display())));
+            }
+            path.canonicalize().map_err(|e| ForgeError::InvalidArgument(format!("cannot resolve --cwd `{}`: {e}", path.display())))?
+        } else {
+            std::env::current_dir().map_err(ForgeError::io("determining current directory"))?
+        };
         let ctx = ForgeContext::with_options(cwd, verbose, quiet, json, yes, offline)?;
         log::debug!("dispatching to plugin `{}`", plugin.name());
         return plugin.run(sub_matches, &ctx);
@@ -121,7 +159,10 @@ pub fn dispatch(plugins: &[Box<dyn ForgePlugin>], matches: &ArgMatches) -> Resul
         )));
     }
 
-    // Otherwise treat it as an external subcommand.
+    let plugin_names: Vec<&str> = plugins.iter().map(|p| p.name()).collect();
+    if let Some(suggestion) = closest_match(name, &plugin_names, 3) {
+        eprintln!("unknown subcommand `{name}`. Did you mean `{suggestion}`?");
+    }
     try_run_external(name, sub_matches)
 }
 

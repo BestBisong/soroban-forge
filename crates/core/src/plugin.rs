@@ -26,6 +26,8 @@ pub struct ForgeContext {
     pub yes: bool,
     /// Whether all network-capable operations are disabled (`--offline`).
     pub offline: bool,
+    /// Explicit log level override, if provided.
+    pub log_level: Option<String>,
 }
 
 impl ForgeContext {
@@ -42,7 +44,7 @@ impl ForgeContext {
         json: bool,
         yes: bool,
     ) -> Result<Self> {
-        Self::with_options(cwd, verbose, quiet, json, yes, false)
+        Self::with_options(cwd, verbose, quiet, json, yes, false, None)
     }
 
     /// Build a context with all global invocation controls.
@@ -53,6 +55,7 @@ impl ForgeContext {
         json: bool,
         yes: bool,
         offline: bool,
+        log_level: Option<String>,
     ) -> Result<Self> {
         let config = ForgeConfig::load_from(&cwd)?;
         Ok(Self {
@@ -63,7 +66,14 @@ impl ForgeContext {
             json,
             yes,
             offline,
+            log_level,
         })
+    }
+
+    pub fn progress(&self, message: &str) {
+        if !self.quiet && !self.json {
+            eprintln!("==> {message}");
+        }
     }
 }
 
@@ -80,8 +90,18 @@ pub trait ForgePlugin {
     /// The clap definition of this subcommand.
     fn command(&self) -> clap::Command;
 
+    /// Hook run immediately before subcommand execution.
+    fn pre_run(&self, _matches: &clap::ArgMatches, _ctx: &ForgeContext) -> Result<()> {
+        Ok(())
+    }
+
     /// Execute the subcommand.
     fn run(&self, matches: &clap::ArgMatches, ctx: &ForgeContext) -> Result<()>;
+
+    /// Hook run after subcommand execution completes.
+    fn post_run(&self, _matches: &clap::ArgMatches, _ctx: &ForgeContext) -> Result<()> {
+        Ok(())
+    }
 }
 
 #[cfg(test)]

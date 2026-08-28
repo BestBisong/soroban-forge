@@ -10,6 +10,13 @@ use log::{Log, Metadata, Record};
 
 use crate::{ForgeError, Result};
 
+fn redact_log_message(message: &str) -> String {
+    message
+        .replace("SECRET", "[redacted]")
+        .replace("secret", "[redacted]")
+        .replace("seed", "[redacted]")
+}
+
 struct ForgeLogger {
     console: env_logger::Logger,
     file: Option<Mutex<File>>,
@@ -39,7 +46,7 @@ impl Log for ForgeLogger {
                 "timestamp_ms": timestamp_ms,
                 "level": record.level().as_str(),
                 "target": record.target(),
-                "message": record.args().to_string(),
+                "message": redact_log_message(&record.args().to_string()),
             });
             if let Ok(mut file) = file.lock() {
                 let _ = serde_json::to_writer(&mut *file, &entry);

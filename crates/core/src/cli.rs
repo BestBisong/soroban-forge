@@ -107,6 +107,13 @@ pub fn build_command(plugins: &[Box<dyn ForgePlugin>]) -> Command {
                 .global(true)
                 .action(ArgAction::SetTrue)
                 .help("Disable all network access"),
+        )
+        .arg(
+            Arg::new("timeout")
+                .long("timeout")
+                .global(true)
+                .value_name("SECS")
+                .help("Override the timeout for network-capable operations"),
         );
     for plugin in plugins {
         cmd = cmd.subcommand(plugin.command());
@@ -147,7 +154,17 @@ pub fn dispatch(plugins: &[Box<dyn ForgePlugin>], matches: &ArgMatches) -> Resul
         } else {
             std::env::current_dir().map_err(ForgeError::io("determining current directory"))?
         };
-        let ctx = ForgeContext::with_options(cwd, verbose, quiet, json, yes, offline)?;
+        let ctx = ForgeContext::with_options(
+            cwd,
+            verbose,
+            quiet,
+            json,
+            yes,
+            offline,
+            matches
+                .get_one::<String>("timeout")
+                .and_then(|value| value.parse::<u64>().ok()),
+        )?;
         log::debug!("dispatching to plugin `{}`", plugin.name());
         return plugin.run(sub_matches, &ctx);
     }

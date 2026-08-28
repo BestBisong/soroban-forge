@@ -94,6 +94,10 @@ impl ForgeError {
             ForgeError::Io { .. } | ForgeError::Other(_) => ExitCode::InternalError,
         }
     }
+
+    pub fn docs_url(&self) -> &'static str {
+        "https://github.com/soroban-forge-labs/soroban-forge/blob/main/docs/exit-codes.md"
+    }
 }
 
 #[cfg(test)]

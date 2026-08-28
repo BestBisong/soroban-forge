@@ -9,7 +9,7 @@
 //! default_template = "hello-world"
 //! ```
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
@@ -26,6 +26,8 @@ pub struct ForgeConfig {
     pub project: ProjectConfig,
     #[serde(default)]
     pub scaffold: ScaffoldConfig,
+    #[serde(default)]
+    pub defaults: DefaultsConfig,
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Deserialize)]
@@ -41,14 +43,18 @@ pub struct ScaffoldConfig {
     pub default_template: Option<String>,
 }
 
+#[derive(Debug, Default, Clone, PartialEq, Deserialize)]
+pub struct DefaultsConfig {
+    pub timeout_secs: Option<u64>,
+}
+
 impl ForgeConfig {
     /// Load `forge.toml` from `dir`, returning `Ok(None)` when the file does
     /// not exist and an error only when it exists but cannot be parsed.
     pub fn load_from(dir: &Path) -> Result<Option<Self>> {
-        let path = dir.join(CONFIG_FILE_NAME);
-        if !path.is_file() {
+        let Some(path) = find_config_path(dir) else {
             return Ok(None);
-        }
+        };
         let raw = std::fs::read_to_string(&path)
             .map_err(ForgeError::io(format!("reading {}", path.display())))?;
         let config = toml::from_str(&raw).map_err(|e| ForgeError::Config {
@@ -62,6 +68,18 @@ impl ForgeConfig {
     pub fn author(&self) -> Option<&str> {
         self.project.authors.first().map(String::as_str)
     }
+}
+
+fn find_config_path(dir: &Path) -> Option<PathBuf> {
+    let mut current = Some(dir);
+    while let Some(path) = current {
+        let candidate = path.join(CONFIG_FILE_NAME);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+        current = path.parent();
+    }
+    None
 }
 
 #[cfg(test)]
@@ -127,6 +145,7 @@ pub fn unknown_keys(raw: &str) -> std::result::Result<Vec<String>, toml::de::Err
             "scaffold" => {
                 collect_strays(value, &["default_template"], "scaffold", &mut strays)
             }
+            "defaults" => collect_strays(value, &["timeout_secs"], "defaults", &mut strays),
             _ => strays.push(key.clone()),
         }
     }
@@ -179,6 +198,11 @@ pub fn resolved_report(config: &Option<ForgeConfig>) -> String {
         // Keep in sync with DEFAULT_TEMPLATE in soroban-forge-scaffold; core
         // cannot depend on scaffold without a dependency cycle.
         None => out.push_str("default_template = \"hello-world\"  # default\n"),
+    }
+    out.push_str("\n[defaults]\n");
+    match config.defaults.timeout_secs {
+        Some(timeout_secs) => out.push_str(&format!("timeout_secs = {timeout_secs}\n")),
+        None => out.push_str("# timeout_secs = (unset)\n"),
     }
     out
 }

@@ -26,6 +26,8 @@ pub struct ForgeContext {
     pub yes: bool,
     /// Whether all network-capable operations are disabled (`--offline`).
     pub offline: bool,
+    /// Global timeout override for network-capable operations, if provided.
+    pub timeout_secs: Option<u64>,
 }
 
 impl ForgeContext {
@@ -42,7 +44,7 @@ impl ForgeContext {
         json: bool,
         yes: bool,
     ) -> Result<Self> {
-        Self::with_options(cwd, verbose, quiet, json, yes, false)
+        Self::with_options(cwd, verbose, quiet, json, yes, false, None)
     }
 
     /// Build a context with all global invocation controls.
@@ -53,6 +55,7 @@ impl ForgeContext {
         json: bool,
         yes: bool,
         offline: bool,
+        timeout_secs: Option<u64>,
     ) -> Result<Self> {
         let config = ForgeConfig::load_from(&cwd)?;
         Ok(Self {
@@ -63,6 +66,7 @@ impl ForgeContext {
             json,
             yes,
             offline,
+            timeout_secs,
         })
     }
 }

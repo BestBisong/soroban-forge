@@ -75,7 +75,7 @@ mod tests {
     use super::*;
 
     fn ctx_in(dir: &std::path::Path, quiet: bool, json: bool) -> ForgeContext {
-        ForgeContext::with_output(dir.to_path_buf(), false, quiet, json).unwrap()
+        ForgeContext::with_output(dir.to_path_buf(), 0, quiet, json, false).unwrap()
     }
 
     #[test]

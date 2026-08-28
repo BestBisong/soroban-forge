@@ -16,6 +16,7 @@ pub mod cli;
 pub mod config;
 pub mod config_cmd;
 pub mod error;
+pub mod logging;
 pub mod plugin;
 pub mod render; // template renderer
 

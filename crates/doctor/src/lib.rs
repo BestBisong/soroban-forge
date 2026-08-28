@@ -7,7 +7,9 @@
 //! - Rust toolchain (`rustc`, `cargo`) at the minimum supported version
 //! - the `wasm32v1-none` compilation target
 //! - the official `stellar` CLI
-//! - `git` (recommended, not required)
+//! - `git` (recommended, not required), and its `user.name`/`user.email`
+//!   identity, without which the first commit in a new project fails
+//! - Docker (optional, used for reproducible wasm builds)
 //! - when run inside a contract project: the project's `soroban-sdk`
 //!   version, compared against the version pinned into new projects
 //!   (`soroban_forge_scaffold::SOROBAN_SDK_VERSION`)
@@ -26,6 +28,12 @@ use soroban_forge_scaffold::SOROBAN_SDK_VERSION;
 
 /// Minimum Rust version able to target `wasm32v1-none`.
 pub const MIN_RUST: (u32, u32) = (1, 84); // minimum major.minor
+
+/// Minimum `stellar` CLI version required.
+pub const MIN_STELLAR: (u32, u32) = (21, 0);
+
+/// Default Soroban RPC endpoint used for the connectivity check.
+pub const TESTNET_RPC_URL: &str = "https://soroban-testnet.stellar.org";
 
 /// Outcome of a single environment check.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -190,8 +198,287 @@ pub fn sdk_version_check(project_dir: &Path) -> Option<Check> {
     })
 }
 
+/// Classify a `docker --version` / `docker info` probe into a report line
+/// (issue #70).
+///
+/// Docker is optional: reproducible Soroban wasm builds commonly use it, but
+/// local development does not need it, so an absent or stopped daemon is a
+/// [`Status::Warn`], never a [`Status::Fail`].
+///
+/// `version_line` is the first line of `docker --version` (`None` when the
+/// binary is missing); `daemon_running` is whether `docker info` succeeded.
+pub fn classify_docker(version_line: Option<&str>, daemon_running: bool) -> Check {
+    match version_line {
+        Some(line) if daemon_running => Check {
+            name: "docker",
+            status: Status::Pass,
+            detail: format!("{line} (daemon running)"),
+            fix: None,
+        },
+        Some(line) => Check {
+            name: "docker",
+            status: Status::Warn,
+            detail: format!("{line} — installed but the daemon is not responding"),
+            fix: Some(
+                "start Docker (open Docker Desktop, or: sudo systemctl start docker) \
+                 — only needed for reproducible wasm builds",
+            ),
+        },
+        None => Check {
+            name: "docker",
+            status: Status::Warn,
+            detail: "not found (optional — used for reproducible wasm builds)".into(),
+            fix: Some("install Docker: https://docs.docker.com/get-docker/"),
+        },
+    }
+}
+
+/// Report whether Docker is installed and its daemon is reachable.
+///
+/// Thin system-touching wrapper around [`classify_docker`].
+pub fn docker_check() -> Check {
+    let version_line = capture("docker", &["--version"]);
+    // `docker info` fails fast when the daemon is not reachable; the format
+    // string keeps output to a single short line.
+    let daemon_running = version_line.is_some()
+        && std::process::Command::new("docker")
+            .args(["info", "--format", "{{.ServerVersion}}"])
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+    classify_docker(version_line.as_deref(), daemon_running)
+}
+
+/// Classify a git identity probe into a report line (issue #71).
+///
+/// `new` initializes a git repo, and the first commit fails confusingly when
+/// `user.name`/`user.email` are unset — so a missing identity is a
+/// [`Status::Warn`] carrying the exact commands to set it.
+pub fn classify_git_identity(name: Option<&str>, email: Option<&str>) -> Check {
+    let name = name.map(str::trim).filter(|s| !s.is_empty());
+    let email = email.map(str::trim).filter(|s| !s.is_empty());
+    match (name, email) {
+        (Some(name), Some(email)) => Check {
+            name: "git identity",
+            status: Status::Pass,
+            detail: format!("{name} <{email}>"),
+            fix: None,
+        },
+        (name, email) => {
+            let missing = match (name.is_some(), email.is_some()) {
+                (false, false) => "user.name and user.email are not set",
+                (true, false) => "user.email is not set",
+                (false, true) => "user.name is not set",
+                (true, true) => unreachable!("both set is handled above"),
+            };
+            Check {
+                name: "git identity",
+                status: Status::Warn,
+                detail: missing.to_string(),
+                fix: Some(
+                    "git config --global user.name \"Your Name\"  &&  \
+                     git config --global user.email \"you@example.com\"",
+                ),
+            }
+        }
+    }
+}
+
+/// Report whether git's committer identity is configured.
+///
+/// Thin system-touching wrapper around [`classify_git_identity`].
+pub fn git_identity_check() -> Check {
+    let name = capture("git", &["config", "--get", "user.name"]);
+    let email = capture("git", &["config", "--get", "user.email"]);
+    classify_git_identity(name.as_deref(), email.as_deref())
+}
+
+/// Check whether `url` is reachable with an HTTP GET, returning latency in ms.
+///
+/// Uses `curl` as a subprocess to avoid pulling in an HTTP client dependency.
+/// A 5-second timeout is applied; failures (network error, timeout, non-2xx)
+/// are reported as `Warn` rather than `Fail` so an offline developer is not
+/// blocked.
+pub fn rpc_connectivity_check(url: &str) -> Check {
+    use std::time::Instant;
+    let start = Instant::now();
+    // -s silent, -o /dev/null discard body, -w write status code,
+    // --max-time 5 abort after 5 s, -L follow redirects.
+    let output = std::process::Command::new("curl")
+        .args(["-s", "-o", "/dev/null", "-w", "%{http_code}", "--max-time", "5", "-L", url])
+        .output();
+    let elapsed_ms = start.elapsed().as_millis();
+    match output {
+        Ok(o) if o.status.success() => {
+            let code_str = String::from_utf8_lossy(&o.stdout);
+            let code: u16 = code_str.trim().parse().unwrap_or(0);
+            if (200..400).contains(&code) {
+                Check {
+                    name: "testnet RPC",
+                    status: Status::Pass,
+                    detail: format!("{url} — HTTP {code} ({elapsed_ms} ms)"),
+                    fix: None,
+                }
+            } else {
+                Check {
+                    name: "testnet RPC",
+                    status: Status::Warn,
+                    detail: format!("{url} — HTTP {code} ({elapsed_ms} ms)"),
+                    fix: Some("check your network connection or configure a different RPC endpoint"),
+                }
+            }
+        }
+        Ok(_) | Err(_) => Check {
+            name: "testnet RPC",
+            status: Status::Warn,
+            detail: format!("{url} — unreachable (timeout or network error, {elapsed_ms} ms)"),
+            fix: Some("check your network connection or configure a different RPC endpoint"),
+        },
+    }
+}
+
+/// Check that [profile.release] in `Cargo.toml` is size-optimised.
+///
+/// Looks for `opt-level = "z"`, `lto = true`, and `codegen-units = 1`.
+/// Returns one [`Check`] per missing setting (or an empty `Vec` when the
+/// manifest is not a Cargo project or already has all three settings).
+pub fn release_profile_checks(project_dir: &Path) -> Vec<Check> {
+    let contents = match std::fs::read_to_string(project_dir.join("Cargo.toml")) {
+        Ok(c) => c,
+        Err(_) => return vec![],
+    };
+    let manifest: toml::Value = match toml::from_str(&contents) {
+        Ok(v) => v,
+        Err(_) => return vec![],
+    };
+    let profile_release = match manifest
+        .get("profile")
+        .and_then(|p| p.get("release"))
+    {
+        Some(t) => t,
+        None => {
+            // No [profile.release] at all — warn for all three settings.
+            return vec![
+                Check {
+                    name: "release opt-level",
+                    status: Status::Warn,
+                    detail: "opt-level not set in [profile.release]".into(),
+                    fix: Some(r#"add to Cargo.toml: [profile.release]\nopt-level = "z""#),
+                },
+                Check {
+                    name: "release lto",
+                    status: Status::Warn,
+                    detail: "lto not set in [profile.release]".into(),
+                    fix: Some("add to Cargo.toml: [profile.release]\nlto = true"),
+                },
+                Check {
+                    name: "release codegen-units",
+                    status: Status::Warn,
+                    detail: "codegen-units not set in [profile.release]".into(),
+                    fix: Some("add to Cargo.toml: [profile.release]\ncodegen-units = 1"),
+                },
+            ];
+        }
+    };
+
+    let mut checks = Vec::new();
+
+    // opt-level = "z"
+    let opt_ok = profile_release
+        .get("opt-level")
+        .and_then(|v| v.as_str())
+        .map(|s| s == "z")
+        .unwrap_or(false);
+    if !opt_ok {
+        checks.push(Check {
+            name: "release opt-level",
+            status: Status::Warn,
+            detail: "opt-level is not \"z\" in [profile.release]".into(),
+            fix: Some(r#"set in Cargo.toml: [profile.release]\nopt-level = "z""#),
+        });
+    }
+
+    // lto = true
+    let lto_ok = profile_release
+        .get("lto")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    if !lto_ok {
+        checks.push(Check {
+            name: "release lto",
+            status: Status::Warn,
+            detail: "lto is not true in [profile.release]".into(),
+            fix: Some("set in Cargo.toml: [profile.release]\nlto = true"),
+        });
+    }
+
+    // codegen-units = 1
+    let cgu_ok = profile_release
+        .get("codegen-units")
+        .and_then(|v| v.as_integer())
+        .map(|n| n == 1)
+        .unwrap_or(false);
+    if !cgu_ok {
+        checks.push(Check {
+            name: "release codegen-units",
+            status: Status::Warn,
+            detail: "codegen-units is not 1 in [profile.release]".into(),
+            fix: Some("set in Cargo.toml: [profile.release]\ncodegen-units = 1"),
+        });
+    }
+
+    checks
+}
+
+/// Run a fast `cargo build --target wasm32v1-none` in `project_dir` and
+/// report whether it succeeds, with timing.
+///
+/// Returns `None` (no report line at all) when `project_dir` does not look
+/// like a cargo project — there is nothing to smoke-build.
+///
+/// Thin system-touching wrapper; not unit-tested beyond the "not a project"
+/// case.
+pub fn wasm_build_check(project_dir: &Path) -> Option<Check> {
+    if !project_dir.join("Cargo.toml").is_file() {
+        return None;
+    }
+
+    let start = std::time::Instant::now();
+    let output = std::process::Command::new("cargo")
+        .args(["build", "--target", "wasm32v1-none"])
+        .current_dir(project_dir)
+        .output();
+    let elapsed_ms = start.elapsed().as_millis();
+
+    Some(match output {
+        Ok(o) if o.status.success() => Check {
+            name: "wasm build",
+            status: Status::Pass,
+            detail: format!("builds to wasm32v1-none ({elapsed_ms} ms)"),
+            fix: None,
+        },
+        Ok(_) => Check {
+            name: "wasm build",
+            status: Status::Fail,
+            detail: format!("cargo build --target wasm32v1-none failed ({elapsed_ms} ms)"),
+            fix: Some("run `cargo build --target wasm32v1-none` directly to see the error"),
+        },
+        Err(_) => Check {
+            name: "wasm build",
+            status: Status::Fail,
+            detail: "could not run cargo".into(),
+            fix: Some("install Rust: https://rustup.rs"),
+        },
+    })
+}
+
 /// Run all environment checks.
 pub fn run_checks() -> Vec<Check> {
+    run_checks_with_network(true)
+}
+
+/// Run environment checks, optionally omitting the RPC connectivity probe.
+pub fn run_checks_with_network(allow_network: bool) -> Vec<Check> {
     let mut checks = Vec::new();
 
     // rustc, with a minimum version.
@@ -260,13 +547,61 @@ pub fn run_checks() -> Vec<Check> {
         },
     });
 
-    // stellar-cli.
+    // wasm32-unknown-unknown target (issue #45).
+    //
+    // Some toolchains and projects still require the older `wasm32-unknown-unknown`
+    // target alongside the newer `wasm32v1-none`. Check for it explicitly.
+    {
+        let installed_targets_wasm32 = std::process::Command::new("rustup")
+            .args(["target", "list", "--installed"])
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned());
+        checks.push(match installed_targets_wasm32 {
+            Some(targets) if targets.lines().any(|t| t.trim() == "wasm32-unknown-unknown") => {
+                Check {
+                    name: "wasm32-unknown-unknown",
+                    status: Status::Pass,
+                    detail: "installed".into(),
+                    fix: None,
+                }
+            }
+            Some(_) => Check {
+                name: "wasm32-unknown-unknown",
+                status: Status::Fail,
+                detail: "missing wasm32 target".into(),
+                fix: Some("rustup target add wasm32-unknown-unknown"),
+            },
+            None => Check {
+                name: "wasm32-unknown-unknown",
+                status: Status::Warn,
+                detail: "rustup not found — could not verify".into(),
+                fix: Some(
+                    "install rustup (https://rustup.rs), then: rustup target add wasm32-unknown-unknown",
+                ),
+            },
+        });
+    }
+
+    // stellar-cli — presence and minimum version (issue #47).
     checks.push(match capture("stellar", &["--version"]) {
-        Some(line) => Check {
+        Some(line) if version_at_least(&line, MIN_STELLAR) => Check {
             name: "stellar-cli",
             status: Status::Pass,
             detail: line,
             fix: None,
+        },
+        Some(line) => Check {
+            name: "stellar-cli",
+            status: Status::Warn,
+            detail: format!(
+                "{line} (need >= {}.{}.0)",
+                MIN_STELLAR.0, MIN_STELLAR.1
+            ),
+            fix: Some(
+                "upgrade: cargo install --locked stellar-cli  (or: brew upgrade stellar-cli)",
+            ),
         },
         None => Check {
             name: "stellar-cli",
@@ -278,12 +613,18 @@ pub fn run_checks() -> Vec<Check> {
         },
     });
 
+    // Testnet RPC connectivity (issue #46).
+    if allow_network {
+        checks.push(rpc_connectivity_check(TESTNET_RPC_URL));
+    }
+
     // git — recommended only.
-    checks.push(match capture("git", &["--version"]) {
+    let git_version = capture("git", &["--version"]);
+    checks.push(match &git_version {
         Some(line) => Check {
             name: "git",
             status: Status::Pass,
-            detail: line,
+            detail: line.clone(),
             fix: None,
         },
         None => Check {
@@ -293,6 +634,14 @@ pub fn run_checks() -> Vec<Check> {
             fix: Some("install git: https://git-scm.com/downloads"),
         },
     });
+
+    // git committer identity (issue #71) — only meaningful when git exists.
+    if git_version.is_some() {
+        checks.push(git_identity_check());
+    }
+
+    // Docker (issue #70) — optional, used for reproducible wasm builds.
+    checks.push(docker_check());
 
     checks
 }
@@ -498,10 +847,29 @@ pub struct DoctorPlugin;
 impl DoctorPlugin {
     /// Run every check, including the project-local `soroban-sdk` check when
     /// invoked inside a contract project.
-    fn gather_checks(&self, ctx: &ForgeContext) -> Vec<Check> {
-        let mut checks = run_checks();
+    ///
+    /// `do_build` opts into the `cargo build --target wasm32v1-none` smoke
+    /// check (issue #72), which is otherwise skipped since it is much slower
+    /// than the rest of the report.
+    fn gather_checks(&self, ctx: &ForgeContext, do_build: bool) -> Vec<Check> {
+        let mut checks = run_checks_with_network(!ctx.offline);
+        if ctx.offline {
+            checks.push(Check {
+                name: "testnet RPC",
+                status: Status::Warn,
+                detail: "skipped (--offline)".into(),
+                fix: None,
+            });
+        }
         if let Some(check) = sdk_version_check(&ctx.cwd) {
             checks.push(check);
+        }
+        // Release profile size-optimisation checks (issue #48).
+        checks.extend(release_profile_checks(&ctx.cwd));
+        if do_build {
+            if let Some(check) = wasm_build_check(&ctx.cwd) {
+                checks.push(check);
+            }
         }
         checks
     }
@@ -573,14 +941,31 @@ impl ForgePlugin for DoctorPlugin {
                     .action(ArgAction::SetTrue)
                     .help("Assume \"yes\"; run --fix remedies without prompting"),
             )
+            .arg(
+                Arg::new("build")
+                    .long("build")
+                    .action(ArgAction::SetTrue)
+                    .help(
+                        "Also run a smoke-build (`cargo build --target wasm32v1-none`) \
+                         of the current project and report success/failure with timing",
+                    ),
+            )
     }
 
     fn run(&self, matches: &ArgMatches, ctx: &ForgeContext) -> Result<()> {
         let use_json = ctx.json || matches.get_flag("json");
         let do_fix = matches.get_flag("fix");
-        let assume_yes = matches.get_flag("yes");
+        let do_build = matches.get_flag("build");
+        let assume_yes = ctx.yes || matches.get_flag("yes");
 
-        let mut checks = self.gather_checks(ctx);
+        if ctx.offline && do_fix {
+            return Err(ForgeError::InvalidArgument(
+                "doctor --fix is unavailable in offline mode because remedies may download tools"
+                    .into(),
+            ));
+        }
+
+        let mut checks = self.gather_checks(ctx, do_build);
 
         if do_fix {
             let remedies = fixable_remedies(&checks);
@@ -593,7 +978,7 @@ impl ForgePlugin for DoctorPlugin {
                 }
                 // Re-check so the final report reflects the fixes; any
                 // non-fixable issues (and any remedy that failed) remain.
-                checks = self.gather_checks(ctx);
+                checks = self.gather_checks(ctx, do_build);
             }
         }
 
@@ -691,6 +1076,14 @@ mod tests {
             fix: None,
         }];
         assert_eq!(failure_count(&checks), 0);
+    }
+
+    // ---- wasm smoke-build check ----
+
+    #[test]
+    fn wasm_build_check_skipped_outside_a_project() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(wasm_build_check(dir.path()).is_none());
     }
 
     // ---- soroban-sdk version check ----
@@ -815,6 +1208,77 @@ mod tests {
         assert_eq!(parsed[1]["name"], "stellar-cli");
         assert_eq!(parsed[1]["status"], "fail");
         assert_eq!(parsed[1]["fix"], "install: brew install stellar-cli");
+    }
+
+    // ---- docker (issue #70) ----
+
+    #[test]
+    fn docker_present_and_running_passes() {
+        let check = classify_docker(Some("Docker version 27.3.1, build ce12230"), true);
+        assert_eq!(check.status, Status::Pass);
+        assert!(check.detail.contains("27.3.1"));
+        assert!(check.fix.is_none());
+    }
+
+    #[test]
+    fn docker_installed_but_daemon_down_warns() {
+        let check = classify_docker(Some("Docker version 27.3.1"), false);
+        assert_eq!(check.status, Status::Warn);
+        assert!(check.detail.contains("daemon is not responding"));
+        assert!(check.fix.unwrap().contains("start Docker"));
+    }
+
+    #[test]
+    fn docker_absent_warns_without_failing() {
+        let check = classify_docker(None, false);
+        assert_eq!(check.status, Status::Warn);
+        assert_eq!(failure_count(&[check.clone()]), 0);
+        assert!(check.detail.contains("not found"));
+        assert!(check.fix.unwrap().contains("docs.docker.com"));
+    }
+
+    // ---- git identity (issue #71) ----
+
+    #[test]
+    fn git_identity_set_passes() {
+        let check = classify_git_identity(Some("Ada Lovelace"), Some("ada@example.com"));
+        assert_eq!(check.status, Status::Pass);
+        assert_eq!(check.detail, "Ada Lovelace <ada@example.com>");
+        assert!(check.fix.is_none());
+    }
+
+    #[test]
+    fn git_identity_missing_warns_with_commands() {
+        let check = classify_git_identity(None, None);
+        assert_eq!(check.status, Status::Warn);
+        assert!(check.detail.contains("user.name and user.email"));
+        let fix = check.fix.unwrap();
+        assert!(fix.contains("git config --global user.name"));
+        assert!(fix.contains("git config --global user.email"));
+    }
+
+    #[test]
+    fn git_identity_reports_which_half_is_missing() {
+        let no_email = classify_git_identity(Some("Ada"), None);
+        assert_eq!(no_email.status, Status::Warn);
+        assert_eq!(no_email.detail, "user.email is not set");
+
+        let no_name = classify_git_identity(None, Some("ada@example.com"));
+        assert_eq!(no_name.detail, "user.name is not set");
+    }
+
+    #[test]
+    fn blank_git_identity_counts_as_unset() {
+        let check = classify_git_identity(Some("  "), Some(""));
+        assert_eq!(check.status, Status::Warn);
+        assert!(check.detail.contains("user.name and user.email"));
+    }
+
+    #[test]
+    fn docker_and_git_identity_are_not_auto_fixable() {
+        for name in ["docker", "git identity"] {
+            assert!(remedy(&fail(name)).is_none(), "{name}");
+        }
     }
 
     // ---- auto-fix (`--fix`) ----

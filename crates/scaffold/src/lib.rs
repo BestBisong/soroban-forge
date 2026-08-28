@@ -106,6 +106,7 @@ pub fn load_manifest(name: &str) -> Result<TemplateManifest> {
 pub fn template_description(name: &str) -> Option<&'static str> {
     match name {
         "amm" => Some("constant-product AMM / liquidity pool (x*y=k, 0.3% fee)"),
+        "allowlist-token" => Some("allowlist-gated token with admin-managed transfer restrictions"),
         "atomic-swap" => Some("atomic two-party token swap with dual authorization"),
         "crowdfund" => Some("escrow/deadline crowdfunding contract"),
         "escrow" => Some("token escrow with approval or timeout-based refund path"),

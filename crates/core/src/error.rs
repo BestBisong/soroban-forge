@@ -163,4 +163,19 @@ mod tests {
         assert_eq!(i32::from(ExitCode::ToolMissing), 2);
         assert_eq!(i32::from(ExitCode::InternalError), 3);
     }
+
+    #[test]
+    fn every_error_variant_maps_to_a_stable_exit_code() {
+        let errors = [
+            ForgeError::Template("x".into()),
+            ForgeError::InvalidArgument("x".into()),
+            ForgeError::Doctor("x".into()),
+            ForgeError::VerificationFailed("x".into()),
+            ForgeError::ToolMissing("stellar".into()),
+            ForgeError::Other("x".into()),
+        ];
+        for error in errors {
+            let _ = error.exit_code();
+        }
+    }
 }

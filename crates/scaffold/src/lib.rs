@@ -65,6 +65,7 @@ pub fn available_templates() -> Vec<&'static str> {
 pub fn template_description(name: &str) -> Option<&'static str> {
     match name {
         "amm" => Some("constant-product AMM / liquidity pool (x*y=k, 0.3% fee)"),
+        "allowlist-token" => Some("allowlist-gated token with admin-managed transfer restrictions"),
         "crowdfund" => Some("escrow/deadline crowdfunding contract"),
         "hello-world" => Some("minimal greeter contract (recommended starting point)"),
         "multisig" => Some("M-of-N multisig account contract (CustomAccountInterface)"),

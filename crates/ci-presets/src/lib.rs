@@ -3,12 +3,12 @@
 //! `soroban-forge ci-init --provider github` — writes CI/CD workflows for a
 //! Soroban contract project.
 
-use std::path::Path;
 use clap::{Arg, ArgAction, ArgMatches, Command};
 use include_dir::{include_dir, Dir};
 use serde::Deserialize;
 use soroban_forge_core::render::{render_str, Vars};
 use soroban_forge_core::{ForgeContext, ForgeError, ForgePlugin, Result};
+use std::path::Path;
 
 static PRESETS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../../presets");
 
@@ -17,6 +17,7 @@ const MATRIX_WORKFLOW: &str = "build-test-matrix.yml";
 const DEPLOY_WORKFLOW: &str = "testnet-deploy.yml";
 const RELEASE_WORKFLOW: &str = "release.yml";
 const SECURITY_SCAN_WORKFLOW: &str = "security-scan.yml";
+const COVERAGE_WORKFLOW: &str = "coverage.yml";
 const DENY_TOML: &str = "deny.toml";
 const HEALTHCHECK_WORKFLOW: &str = "testnet-healthcheck.yml";
 pub const DEFAULT_MSRV: &str = "1.84";
@@ -34,7 +35,7 @@ pub fn available_providers() -> Vec<&'static str> {
 pub fn output_dir(provider: &str) -> &'static str {
     match provider {
         "github" => ".github/workflows",
-        "gitlab" | "bitbucket" | "azure" => ".",
+        "gitlab" | "bitbucket" | "azure" | "woodpecker" => ".",
         "circleci" => ".circleci",
         _ => unreachable!("validated against available_providers()"),
     }
@@ -69,6 +70,7 @@ fn project_name(dir: &Path, ctx: &ForgeContext) -> String {
 pub struct GenerateOptions {
     pub deploy: bool,
     pub security_scan: bool,
+    pub coverage: bool,
     pub healthcheck: bool,
     pub matrix: bool,
     pub msrv: Option<String>,
@@ -79,7 +81,7 @@ pub fn generate(
     dir: &Path,
     provider: &str,
     project_name: &str,
-    deploy: bool,
+    _deploy: bool,
     release: bool,
     opts: &GenerateOptions,
     force: bool,
@@ -115,6 +117,9 @@ pub fn generate(
                 list.push((SECURITY_SCAN_WORKFLOW, None));
                 list.push((DENY_TOML, Some(".")));
             }
+            if opts.coverage {
+                list.push((COVERAGE_WORKFLOW, None));
+            }
             if opts.healthcheck {
                 list.push((HEALTHCHECK_WORKFLOW, None));
             }
@@ -133,6 +138,7 @@ pub fn generate(
         "bitbucket" => vec![("bitbucket-pipelines.yml", None)],
         "azure" => vec![("azure-pipelines.yml", None)],
         "circleci" => vec![("config.yml", None)],
+        "woodpecker" => vec![(".woodpecker.yml", None)],
         _ => {
             return Err(ForgeError::InvalidArgument(format!(
                 "unknown provider `{provider}` (available: {})",
@@ -213,6 +219,12 @@ pub fn format_report(
              Enable Dependabot under: repo -> Settings -> Code security\n",
         );
     }
+    if opts.coverage {
+        out.push_str(
+            "\ncoverage: upload test results to Codecov by adding a repository secret named\n\
+             CODECOV_TOKEN. If that secret is missing, the workflow skips the upload gracefully.\n",
+        );
+    }
     if opts.healthcheck {
         out.push_str(
             "\ntestnet-healthcheck: the smoke entry point defaults to `version` then `ping`.\n\
@@ -251,10 +263,11 @@ impl ForgePlugin for CiPresetsPlugin {
                 Arg::new("provider")
                     .long("provider")
                     .default_value("github")
-                    .help("CI provider (`github`, `gitlab`, `circleci`, `azure`, or `bitbucket`)"),
+                    .help("CI provider (`github`, `gitlab`, `circleci`, `azure`, `bitbucket`, or `woodpecker`)"),
             )
             .arg(Arg::new("deploy").long("deploy").action(ArgAction::SetTrue))
             .arg(Arg::new("security-scan").long("security-scan").action(ArgAction::SetTrue))
+            .arg(Arg::new("coverage").long("coverage").action(ArgAction::SetTrue))
             .arg(Arg::new("healthcheck").long("healthcheck").action(ArgAction::SetTrue))
             .arg(Arg::new("matrix").long("matrix").action(ArgAction::SetTrue))
             .arg(Arg::new("msrv").long("msrv").value_name("VERSION"))
@@ -274,6 +287,7 @@ impl ForgePlugin for CiPresetsPlugin {
         let opts = GenerateOptions {
             deploy: matches.get_flag("deploy"),
             security_scan: matches.get_flag("security-scan"),
+            coverage: matches.get_flag("coverage"),
             healthcheck: matches.get_flag("healthcheck"),
             matrix: matches.get_flag("matrix"),
             msrv: matches.get_one::<String>("msrv").cloned(),
@@ -312,8 +326,56 @@ mod tests {
         GenerateOptions::default()
     }
 
+    #[allow(dead_code)]
     fn deploy_opts() -> GenerateOptions {
         GenerateOptions { deploy: true, ..Default::default() }
+    }
+
+    #[test]
+    fn coverage_defaults_to_false() {
+        assert!(!GenerateOptions::default().coverage);
+    }
+
+    #[test]
+    fn coverage_flag_is_parsed() {
+        let matches = CiPresetsPlugin
+            .command()
+            .try_get_matches_from(["ci-init", "--coverage"])
+            .unwrap();
+        assert!(matches.get_flag("coverage"));
+    }
+
+    #[test]
+    fn github_preset_generates_coverage_only_when_enabled() {
+        let default_dir = tempfile::tempdir().unwrap();
+        let default_written = generate(
+            default_dir.path(),
+            "github",
+            "my-contract",
+            false,
+            false,
+            &base_opts(),
+            false,
+        )
+        .unwrap();
+        assert_eq!(default_written, vec![".github/workflows/build-test.yml", ".github/workflows/contract-size.yml"]);
+        assert!(!default_dir.path().join(".github/workflows/coverage.yml").exists());
+
+        let coverage_dir = tempfile::tempdir().unwrap();
+        let coverage_written = generate(
+            coverage_dir.path(),
+            "github",
+            "my-contract",
+            false,
+            false,
+            &GenerateOptions { coverage: true, ..Default::default() },
+            false,
+        )
+        .unwrap();
+        assert!(coverage_written.iter().any(|p| p == ".github/workflows/coverage.yml"));
+        let contents = std::fs::read_to_string(coverage_dir.path().join(".github/workflows/coverage.yml")).unwrap();
+        assert!(contents.contains("codecov/codecov-action@v4"));
+        assert!(contents.contains("cargo llvm-cov"));
     }
 
     #[test]
@@ -324,6 +386,7 @@ mod tests {
         assert!(providers.contains(&"circleci"));
         assert!(providers.contains(&"bitbucket"));
         assert!(providers.contains(&"azure"));
+        assert!(providers.contains(&"woodpecker"));
     }
 
     #[test]
@@ -343,5 +406,18 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let written = generate(dir.path(), "bitbucket", "my-contract", false, false, &base_opts(), false).unwrap();
         assert_eq!(written, vec!["bitbucket-pipelines.yml"]);
+    }
+
+    #[test]
+    fn writes_woodpecker_preset() {
+        let dir = tempfile::tempdir().unwrap();
+        let written = generate(dir.path(), "woodpecker", "my-contract", false, false, &base_opts(), false).unwrap();
+        assert_eq!(written, vec![".woodpecker.yml"]);
+        let contents = std::fs::read_to_string(dir.path().join(".woodpecker.yml")).unwrap();
+        assert!(contents.contains("my-contract"));
+        assert!(contents.contains("cargo test"));
+        assert!(contents.contains("cargo build --target wasm32v1-none --release"));
+        assert!(contents.contains("cargo clippy --all-targets -- -D warnings"));
+        assert!(!contents.contains("{{project_name}}"));
     }
 }

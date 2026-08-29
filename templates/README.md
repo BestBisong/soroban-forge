@@ -30,6 +30,7 @@ for the template format and how to add a new one.
 - `subscription` — recurring payment charged once per elapsed interval
 - `vesting` — token vesting with cliff + linear release schedule
 - `wrapped-asset` — 1:1 wrapper token minted on deposit, burned on withdraw
+- `english-auction` — ascending-bid auction with seller settlement
 
 Manifests are shipped as `Cargo.toml.hbs` so cargo doesn't treat these
 directories as packages; the `.hbs` suffix is stripped when a project is

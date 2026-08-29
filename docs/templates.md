@@ -13,6 +13,7 @@ List them at any time with `soroban-forge templates`:
 - `nft` – NFT with per-token metadata and minting
 - `token` – SEP-41 fungible token (`soroban_sdk::token::TokenInterface`)
 - `vesting` – token vesting with cliff + linear release schedule
+- `yield-vault` – ERC4626-style yield vault with proportional shares and vault-favoured rounding
 
 ## Variables
 
@@ -79,6 +80,7 @@ description; `soroban-forge new <name> --template <t>` scaffolds one.
 | `atomic-swap`      | atomic two-party token swap with dual authorization              |
 | `governance`       | DAO governance with weighted voting, quorum and execution        |
 | `multisig`         | M-of-N multisig account contract (`CustomAccountInterface`)      |
+| `yield-vault`      | ERC4626-style yield vault with vault-favoured rounding           |
 
 Every template ships a `README.md` with build/deploy instructions and unit
 tests that pass out of the box:
@@ -130,6 +132,16 @@ The seller initializes the auction with `start_price`, `floor_price`, and
 from `start_price` to `floor_price` over the duration. The first buyer to call
 `buy` purchases the asset at the current price, which immediately transfers the
 asset to the buyer and the payment to the seller.
+
+## Yield vault
+
+An ERC4626-style vault where depositors escrow a SEP-41 token and receive proportional
+vault shares. As yield is added (via `add_yield`), each share becomes redeemable for a
+greater amount of underlying assets.
+
+The vault enforces a strict **vault-favoured rounding policy**:
+- **Deposits**: `shares = (assets * total_shares) / total_assets` (rounds down to prevent share inflation / dilution of existing holders).
+- **Withdrawals**: `assets = (shares * total_assets) / total_shares` (rounds down to prevent draining fractional assets from remaining holders).
 
 ## Adding a template
 

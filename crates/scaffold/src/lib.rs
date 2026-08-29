@@ -118,6 +118,7 @@ pub fn template_description(name: &str) -> Option<&'static str> {
         "upgradeable" => Some("admin-gated upgradeable contract (update_current_contract_wasm)"),
         "vesting" => Some("token vesting with cliff + linear release schedule"),
         "wrapped-asset" => Some("mints a wrapper token on deposit and burns it on withdraw 1:1"),
+        "yield-vault" => Some("ERC-4626-style yield vault with proportional shares and vault-favoured rounding"),
         _ => None,
     }
 }
@@ -1272,7 +1273,8 @@ default = "MYT"
                 "token",
                 "upgradeable",
                 "vesting",
-                "wrapped-asset"
+                "wrapped-asset",
+                "yield-vault"
             ]
         );
     }

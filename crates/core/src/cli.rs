@@ -94,6 +94,13 @@ pub fn build_command(plugins: &[Box<dyn ForgePlugin>]) -> Command {
                 .help("Also write structured JSON logs to PATH"),
         )
         .arg(
+            Arg::new("log-level")
+                .long("log-level")
+                .global(true)
+                .value_name("LEVEL")
+                .help("Override the log level for console and file output"),
+        )
+        .arg(
             Arg::new("cwd")
                 .long("cwd")
                 .short('C')
@@ -161,12 +168,18 @@ pub fn dispatch(plugins: &[Box<dyn ForgePlugin>], matches: &ArgMatches) -> Resul
             json,
             yes,
             offline,
+            matches.get_one::<String>("log-level").cloned(),
+        )?;
+        ctx.progress(&format!("running {name}"));
             matches
                 .get_one::<String>("timeout")
                 .and_then(|value| value.parse::<u64>().ok()),
         )?;
         log::debug!("dispatching to plugin `{}`", plugin.name());
-        return plugin.run(sub_matches, &ctx);
+        plugin.pre_run(sub_matches, &ctx)?;
+        let result = plugin.run(sub_matches, &ctx);
+        plugin.post_run(sub_matches, &ctx)?;
+        return result;
     }
 
     // External plugins are outside forge's control and could access the network.

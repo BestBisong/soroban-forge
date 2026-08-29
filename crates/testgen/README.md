@@ -24,6 +24,11 @@ per-transaction ceilings (100M CPU instructions, 40 MiB); run
 `cargo test --test forge_budget -- --nocapture` to see the real cost and
 tighten the constants so a regression fails the test.
 
+`--contract <name>` targets one member of a multi-contract workspace, matched by
+package name, crate name or directory. A workspace with more than one contract
+and no `--contract` stops and lists the candidates rather than generating a
+harness for every member. Single-contract projects are unaffected.
+
 `tests/forge_init_once.rs` needs no flag: it is written whenever the contract
 exposes an entrypoint named `initialize`, `initialise`, `init` or `setup`. It
 calls the entrypoint, then asserts `try_<entrypoint>` returns `Err` on a second
@@ -59,6 +64,8 @@ testgen::generate_with(dir, &GenerateOptions) -> Result<(ContractInfo, Vec<&str>
 testgen::inspect(dir) -> Result<ContractInfo>;
 testgen::build_budget_test(&info, entrypoint) -> Result<String>;
 testgen::build_init_once_test(&info) -> String;
+testgen::candidates(root, &members) -> Vec<Candidate>;
+testgen::resolve(requested, &candidates) -> Result<Selection>;
 testgen::detect::detect_init_method(&methods) -> Option<MethodInfo>;
 ```
 

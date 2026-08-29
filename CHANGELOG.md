@@ -18,6 +18,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - `soroban-forge test-init` now emits `tests/forge_init_once.rs` whenever the
   contract exposes an initialize-style entrypoint, asserting a second call is
   rejected
+- `soroban-forge test-init --contract <name>` targets one member of a
+  multi-contract workspace, matched by package name, crate name or directory.
+  A workspace with more than one contract and no `--contract` now stops and
+  lists the candidates instead of generating a harness for every member (#233)
 
 ### Changed
 - `soroban-forge new --force` asks for confirmation before overwriting an

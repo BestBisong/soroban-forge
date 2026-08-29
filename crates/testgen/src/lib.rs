@@ -17,6 +17,7 @@
 //! generated for its registration in the smoke test.
 
 pub mod bench;
+pub mod containers;
 pub mod detect;
 pub mod target;
 pub mod upgrade;
@@ -29,6 +30,7 @@ use soroban_forge_core::{ForgeContext, ForgeError, ForgePlugin, Result};
 
 pub use detect::{inspect, ContractInfo};
 pub use bench::{build_bench, ensure_bench_target};
+pub use containers::build_roundtrip_tests;
 pub use target::{candidates, resolve, Candidate, Selection};
 pub use upgrade::build_upgrade_test;
 
@@ -1372,6 +1374,8 @@ pub fn generate_with_layout(
     let ttl_test = build_ttl_test(&info);
     // Empty unless the contract exposes an upgrade entrypoint (#234).
     let upgrade_test = build_upgrade_test(&info);
+    // Empty unless an entrypoint takes a container argument (#236).
+    let roundtrip_test = build_roundtrip_tests(&info);
 
     let mut files: Vec<(&'static str, String)> = Vec::new();
     match layout {
@@ -1389,6 +1393,9 @@ pub fn generate_with_layout(
             if !upgrade_test.is_empty() {
                 files.push(("tests/forge_upgrade.rs", upgrade_test));
             }
+            if !roundtrip_test.is_empty() {
+                files.push(("tests/forge_roundtrip.rs", roundtrip_test));
+            }
         }
         TestLayout::Inline => {
             let mut sections: Vec<(&str, String)> = vec![
@@ -1404,6 +1411,9 @@ pub fn generate_with_layout(
             }
             if !upgrade_test.is_empty() {
                 sections.push(("upgrade", upgrade_test));
+            }
+            if !roundtrip_test.is_empty() {
+                sections.push(("roundtrip", roundtrip_test));
             }
             files.push((INLINE_MODULE_PATH, build_inline_module(&info, &sections)));
         }

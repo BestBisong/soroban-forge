@@ -29,6 +29,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - `soroban-forge test-init --bench` emits criterion benchmarks under `benches/`
   and adds the `[[bench]]` target to `Cargo.toml`. Where `--budget` gates a
   ceiling, these track entrypoint cost over time (#235)
+- `soroban-forge test-init` now emits `tests/forge_roundtrip.rs` for
+  entrypoints taking `Option`, `Vec` or `Map` arguments, passing empty,
+  single- and multi-element values through each — container arguments are
+  frequently mis-encoded, the empty case most of all (#236)
 
 ### Changed
 - `test-init --bench` is no longer an alias for `--budget`. It now emits

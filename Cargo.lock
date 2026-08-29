@@ -1135,6 +1135,9 @@ dependencies = [
  "clap",
  "log",
  "soroban-forge-core",
+]
+
+[[package]]
 name = "soroban-forge-network"
 version = "0.1.0"
 dependencies = [

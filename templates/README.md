@@ -17,6 +17,7 @@ for the template format and how to add a new one.
 - `amm` — constant-product AMM / liquidity pool
 - `atomic-swap` — atomic two-party token swap
 - `crowdfund` — escrow/deadline crowdfunding example
+- `dutch-auction` — descending-price auction with linear price decay
 - `escrow` — token escrow with approval or timeout-based refund
 - `faucet` — token faucet with per-address cooldown
 - `governance` — DAO governance with weighted voting and quorum

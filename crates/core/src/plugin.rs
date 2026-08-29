@@ -28,6 +28,8 @@ pub struct ForgeContext {
     pub offline: bool,
     /// Explicit log level override, if provided.
     pub log_level: Option<String>,
+    /// Global timeout override for network-capable operations, if provided.
+    pub timeout_secs: Option<u64>,
 }
 
 impl ForgeContext {
@@ -56,6 +58,7 @@ impl ForgeContext {
         yes: bool,
         offline: bool,
         log_level: Option<String>,
+        timeout_secs: Option<u64>,
     ) -> Result<Self> {
         let config = ForgeConfig::load_from(&cwd)?;
         Ok(Self {
@@ -67,6 +70,7 @@ impl ForgeContext {
             yes,
             offline,
             log_level,
+            timeout_secs,
         })
     }
 

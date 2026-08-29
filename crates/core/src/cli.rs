@@ -114,6 +114,13 @@ pub fn build_command(plugins: &[Box<dyn ForgePlugin>]) -> Command {
                 .global(true)
                 .action(ArgAction::SetTrue)
                 .help("Disable all network access"),
+        )
+        .arg(
+            Arg::new("timeout")
+                .long("timeout")
+                .global(true)
+                .value_name("SECS")
+                .help("Override the timeout for network-capable operations"),
         );
     for plugin in plugins {
         cmd = cmd.subcommand(plugin.command());
@@ -164,6 +171,10 @@ pub fn dispatch(plugins: &[Box<dyn ForgePlugin>], matches: &ArgMatches) -> Resul
             matches.get_one::<String>("log-level").cloned(),
         )?;
         ctx.progress(&format!("running {name}"));
+            matches
+                .get_one::<String>("timeout")
+                .and_then(|value| value.parse::<u64>().ok()),
+        )?;
         log::debug!("dispatching to plugin `{}`", plugin.name());
         plugin.pre_run(sub_matches, &ctx)?;
         let result = plugin.run(sub_matches, &ctx);

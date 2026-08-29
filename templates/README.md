@@ -6,6 +6,7 @@ for the template format and how to add a new one.
 
 - `hello-world` — minimal greeter contract
 - `nft` — non-fungible token with metadata, minting and burning
+- `nft-marketplace` — NFT marketplace for listing, buying, and cancelling sales with configurable treasury fees
 - `token` — SEP-41 fungible token (`soroban_sdk::token::TokenInterface`)
 - `crowdfund` — escrow/deadline crowdfunding example
 - `upgradeable` — admin-gated upgradeable contract (`update_current_contract_wasm`)

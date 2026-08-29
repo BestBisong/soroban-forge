@@ -11,6 +11,7 @@ List them at any time with `soroban-forge templates`:
 - `hello-world` – minimal greeter contract (recommended starting point)
 - `multisig` – M-of-N multisig account contract (`CustomAccountInterface`)
 - `nft` – NFT with per-token metadata and minting
+- `nft-marketplace` – NFT marketplace for listing, buying, and cancelling sales with configurable fees
 - `token` – SEP-41 fungible token (`soroban_sdk::token::TokenInterface`)
 - `vesting` – token vesting with cliff + linear release schedule
 
@@ -68,6 +69,7 @@ description; `soroban-forge new <name> --template <t>` scaffolds one.
 | `hello-world`      | minimal greeter contract (recommended starting point)            |
 | `token`            | SEP-41 fungible token (`soroban_sdk::token::TokenInterface`)     |
 | `nft`              | non-fungible token with per-token metadata and minting           |
+| `nft-marketplace`  | NFT marketplace for listing, buying, and cancelling sales        |
 | `crowdfund`        | escrow/deadline crowdfunding contract                            |
 | `dutch-auction`    | descending-price auction with linear price decay                 |
 | `escrow`           | token escrow with approval or timeout-based refund path          |
@@ -130,6 +132,15 @@ The seller initializes the auction with `start_price`, `floor_price`, and
 from `start_price` to `floor_price` over the duration. The first buyer to call
 `buy` purchases the asset at the current price, which immediately transfers the
 asset to the buyer and the payment to the seller.
+
+## NFT marketplace
+
+Sellers list NFTs from any contract conforming to the `nft` template's interface,
+specifying a payment token (SEP-41) and price. The NFT is escrowed in the
+marketplace during the listing. Buyers purchase NFTs at the listed price, with a
+configurable basis-point protocol fee automatically routed to a treasury address
+and the remainder sent to the seller. Sellers can cancel open listings at any time
+to reclaim their NFT.
 
 ## Adding a template
 

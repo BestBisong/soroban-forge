@@ -5,6 +5,7 @@ List them at any time with `soroban-forge templates`:
 - `amm` – constant-product AMM / liquidity pool (x*y=k, 0.3% fee)
 - `atomic-swap` – atomic two-party token swap with dual authorization
 - `crowdfund` – escrow/deadline crowdfunding contract
+- `dutch-auction` – descending-price auction with linear price decay and immediate settlement
 - `escrow` – token escrow with approval or timeout-based refund path
 - `governance` – DAO governance with weighted voting, quorum, and proposal execution
 - `hello-world` – minimal greeter contract (recommended starting point)
@@ -68,6 +69,7 @@ description; `soroban-forge new <name> --template <t>` scaffolds one.
 | `token`            | SEP-41 fungible token (`soroban_sdk::token::TokenInterface`)     |
 | `nft`              | non-fungible token with per-token metadata and minting           |
 | `crowdfund`        | escrow/deadline crowdfunding contract                            |
+| `dutch-auction`    | descending-price auction with linear price decay                 |
 | `escrow`           | token escrow with approval or timeout-based refund path          |
 | `vesting`          | token vesting with cliff + linear release schedule               |
 | `payment-splitter` | splits received funds between payees by fixed shares             |
@@ -120,6 +122,14 @@ reproduce are:
 
 The `leaf` entrypoint is public so a script can check its own hashing against
 the contract's before publishing a root.
+
+## Dutch auction
+
+The seller initializes the auction with `start_price`, `floor_price`, and
+`duration_seconds`, then deposits the asset via `fund`. The price decays linearly
+from `start_price` to `floor_price` over the duration. The first buyer to call
+`buy` purchases the asset at the current price, which immediately transfers the
+asset to the buyer and the payment to the seller.
 
 ## Adding a template
 

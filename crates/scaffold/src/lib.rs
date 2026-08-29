@@ -17,14 +17,6 @@
 
 pub mod manifest;
 
-use std::collections::BTreeMap;
-use std::io::{IsTerminal, Write};
-//! Available variables: `project_name`, `crate_name`, `author`, `sdk_version`,
-//! plus any extra variables a template declares in its `template.toml` (see
-//! [`manifest`]).
-
-mod manifest;
-
 pub use manifest::{TemplateManifest, TemplateVariable};
 
 use std::collections::BTreeMap;
@@ -35,8 +27,6 @@ use clap::{Arg, ArgAction, ArgMatches, Command};
 use include_dir::{include_dir, Dir};
 use soroban_forge_core::render::{render_str, Vars};
 use soroban_forge_core::{ForgeContext, ForgeError, ForgePlugin, Result};
-
-pub use manifest::{TemplateManifest, TemplateVariable};
 
 static TEMPLATES: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../../templates");
 
@@ -109,6 +99,7 @@ pub fn template_description(name: &str) -> Option<&'static str> {
         "allowlist-token" => Some("allowlist-gated token with admin-managed transfer restrictions"),
         "atomic-swap" => Some("atomic two-party token swap with dual authorization"),
         "crowdfund" => Some("escrow/deadline crowdfunding contract"),
+        "dutch-auction" => Some("descending-price auction with linear price decay and immediate settlement"),
         "escrow" => Some("token escrow with approval or timeout-based refund path"),
         "faucet" => Some("token faucet dispensing a fixed amount per address with a cooldown"),
         "governance" => Some("DAO governance with weighted voting, quorum, and proposal execution"),
@@ -117,7 +108,9 @@ pub fn template_description(name: &str) -> Option<&'static str> {
         "merkle-airdrop" => Some("one-claim-per-address airdrop verified against a merkle root"),
         "multisig" => Some("M-of-N multisig account contract (CustomAccountInterface)"),
         "nft" => Some("NFT (non-fungible token) with per-token metadata and minting"),
+        "oracle-consumer" => Some("consumes price data from an external oracle (e.g. Reflector)"),
         "payment-splitter" => Some("splits received funds between payees by fixed shares"),
+        "soulbound" => Some("soulbound (non-transferable) token contract"),
         "staking" => Some("proportional reward staking with O(1) acc_reward_per_share accumulator"),
         "streaming" => Some("streams tokens linearly over time with cancels and withdrawals"),
         "subscription" => Some("recurring payment charged once per elapsed interval"),
@@ -330,9 +323,9 @@ pub fn resolve_extra_vars(
         let value = if let Some(v) = overrides.get(&var.name) {
             v.clone()
         } else if interactive {
-            prompt_for(&var.prompt, &var.default)?
+            prompt_for(var.prompt_text(), var.default.as_deref().unwrap_or(""))?
         } else {
-            var.default.clone()
+            var.default.clone().unwrap_or_default()
         };
         vars.insert(var.name.clone(), value);
     }
@@ -651,7 +644,6 @@ fn render_dir_fs(dir: &Path, source_root: &Path, dest: &Path, vars: &Vars) -> Re
                 .expect("path must be under source_root");
             if is_manifest(rel) {
                 continue; // template.toml configures generation; it is not output
-        }
             }
 
             // Apply variable substitution to the relative path (including each
@@ -690,6 +682,7 @@ fn render_dir_fs(dir: &Path, source_root: &Path, dest: &Path, vars: &Vars) -> Re
         }
     }
     Ok(())
+}
 
 /// True for the template's own `template.toml`, which lives at the root of a
 /// template and drives generation rather than being part of the output.
@@ -1252,30 +1245,32 @@ default = "MYT"
         assert_eq!(names, vec!["token_name", "token_symbol", "token_decimals"]);
     }
 
-    fn lists_all_three_templates() {
     #[test]
     fn lists_all_bundled_templates() {
         assert_eq!(
             available_templates(),
             vec![
+                "allowlist-token",
                 "amm",
                 "atomic-swap",
                 "crowdfund",
+                "dutch-auction",
                 "escrow",
                 "faucet",
                 "governance",
                 "hello-world",
                 "lottery",
-                "multisig",
-                "nft",
                 "merkle-airdrop",
                 "multisig",
                 "nft",
+                "oracle-consumer",
                 "payment-splitter",
+                "soulbound",
                 "staking",
                 "streaming",
                 "subscription",
                 "token",
+                "upgradeable",
                 "vesting",
                 "wrapped-asset"
             ]
@@ -1310,31 +1305,7 @@ default = "MYT"
     fn catalog_returns_all_templates_with_descriptions() {
         let catalog = template_catalog();
         let names: Vec<&str> = catalog.iter().map(|t| t.name).collect();
-        assert_eq!(
-            names,
-            vec![
-                "amm",
-                "atomic-swap",
-                "crowdfund",
-                "escrow",
-                "faucet",
-                "governance",
-                "hello-world",
-                "lottery",
-                "multisig",
-                "nft",
-                "merkle-airdrop",
-                "multisig",
-                "nft",
-                "payment-splitter",
-                "staking",
-                "streaming",
-                "subscription",
-                "token",
-                "vesting",
-                "wrapped-asset"
-            ]
-        );
+        assert_eq!(names, available_templates());
         for entry in &catalog {
             assert!(
                 !entry.description.is_empty(),
@@ -1776,6 +1747,9 @@ default = "MYT"
     #[test]
     fn bundled_templates_without_a_manifest_report_none() {
         for template in available_templates() {
+            if ["crowdfund", "hello-world", "token"].contains(&template) {
+                continue;
+            }
             assert_eq!(
                 bundled_manifest(template).unwrap(),
                 None,

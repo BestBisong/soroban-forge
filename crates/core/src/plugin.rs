@@ -50,6 +50,10 @@ impl ForgeContext {
     }
 
     /// Build a context with all global invocation controls.
+    ///
+    /// `config_path`, when set (from `--config`), is loaded directly and
+    /// errors if missing/invalid. Otherwise `forge.toml` is discovered by
+    /// walking up from `cwd`, same as before.
     pub fn with_options(
         cwd: PathBuf,
         verbose: u8,
@@ -59,8 +63,12 @@ impl ForgeContext {
         offline: bool,
         log_level: Option<String>,
         timeout_secs: Option<u64>,
+        config_path: Option<PathBuf>,
     ) -> Result<Self> {
-        let config = ForgeConfig::load_from(&cwd)?;
+        let config = match &config_path {
+            Some(path) => Some(ForgeConfig::load_from_path(path)?),
+            None => ForgeConfig::load_from(&cwd)?,
+        };
         Ok(Self {
             cwd,
             config,
@@ -146,5 +154,50 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let ctx = ForgeContext::with_output(dir.path().to_path_buf(), 0, false, false, true).unwrap();
         assert!(ctx.yes);
+    }
+
+    #[test]
+    fn context_loads_explicit_config_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("custom.toml");
+        std::fs::write(&config_path, "[defaults]\ntimeout_secs = 42\n").unwrap();
+
+        let ctx = ForgeContext::with_options(
+            dir.path().to_path_buf(),
+            0,
+            false,
+            false,
+            false,
+            false,
+            None,
+            None,
+            Some(config_path),
+        )
+        .unwrap();
+
+        assert_eq!(
+            ctx.config.as_ref().and_then(|c| c.defaults.timeout_secs),
+            Some(42)
+        );
+    }
+
+    #[test]
+    fn context_errors_on_invalid_explicit_config_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing_path = dir.path().join("nonexistent.toml");
+
+        let res = ForgeContext::with_options(
+            dir.path().to_path_buf(),
+            0,
+            false,
+            false,
+            false,
+            false,
+            None,
+            None,
+            Some(missing_path),
+        );
+
+        assert!(res.is_err());
     }
 }

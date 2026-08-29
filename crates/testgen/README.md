@@ -12,17 +12,44 @@ Soroban contract project and it generates
 | `tests/forge_invariant.rs` | proptest-based invariant testing harness asserting state properties across random call sequences |
 | `tests/forge_init_once.rs` | (when an initialize-style entrypoint is detected) asserts a second call to it is rejected |
 | `tests/forge_budget.rs` | (with `--budget`) benchmark measuring one entrypoint's CPU instructions and memory via `env.cost_estimate().budget()`, asserting an upper bound |
+| `tests/forge_upgrade.rs` | (when an upgrade entrypoint is detected) writes state, upgrades the contract, and asserts the state survived |
+| `tests/forge_roundtrip.rs` | (when an entrypoint takes an `Option`, `Vec` or `Map`) passes empty, single- and multi-element values through it |
+| `benches/forge_bench.rs` | (with `--bench`) criterion benchmarks, one per entrypoint, for tracking cost over time |
 | `fuzz/Cargo.toml`      | (with `--fuzz`) cargo-fuzz workspace manifest |
 | `fuzz/fuzz_targets/fuzz_target_1.rs` | (with `--fuzz`) property-based fuzzer feeding arbitrary values into detected contract methods |
 
 Pass `--prop` (or `--invariant`/`--property`) to `test-init` to generate the
 property-based invariant harness, and `--fuzz` to emit a cargo-fuzz target.
 
-`--budget [ENTRYPOINT]` (alias `--bench`) emits the budget test, measuring the
-named entrypoint or the first one detected. It starts at Soroban's
-per-transaction ceilings (100M CPU instructions, 40 MiB); run
-`cargo test --test forge_budget -- --nocapture` to see the real cost and
-tighten the constants so a regression fails the test.
+`--budget [ENTRYPOINT]` emits the budget test, measuring the named entrypoint or
+the first one detected. It starts at Soroban's per-transaction ceilings (100M
+CPU instructions, 40 MiB); run `cargo test --test forge_budget -- --nocapture`
+to see the real cost and tighten the constants so a regression fails the test.
+
+`--bench` emits criterion benchmarks under `benches/` and adds the `[[bench]]`
+target to `Cargo.toml`. Where the budget test gates a ceiling, these track cost
+over time — see [docs/testing-guide.md](../../docs/testing-guide.md#benchmarks-criterion).
+
+> `--bench` was previously an alias for `--budget`. It now selects criterion
+> benchmarks; use `--budget` for the ceiling test.
+
+`--contract <name>` targets one member of a multi-contract workspace, matched by
+package name, crate name or directory. A workspace with more than one contract
+and no `--contract` stops and lists the candidates rather than generating a
+harness for every member. Single-contract projects are unaffected.
+
+`tests/forge_upgrade.rs` needs no flag. It is written when the contract exposes
+an upgrade entrypoint — one named `upgrade`, `upgrade_contract`, `set_wasm` or
+`migrate`, or any method taking a `BytesN<32>` argument whose name mentions
+wasm. It writes state, upgrades, and asserts the state survived. The test ships
+`#[ignore]`d because a real migration test needs a second wasm; the generated
+file documents how to point it at one.
+
+`tests/forge_roundtrip.rs` needs no flag either. It is written when an
+entrypoint takes an `Option`, `Vec` or `Map`, and covers the empty, single- and
+multi-element cases for each — the empty case especially, where the host and the
+contract can disagree about the encoding and the call returns a plausible wrong
+value instead of failing.
 
 `tests/forge_init_once.rs` needs no flag: it is written whenever the contract
 exposes an entrypoint named `initialize`, `initialise`, `init` or `setup`. It
@@ -59,6 +86,15 @@ testgen::generate_with(dir, &GenerateOptions) -> Result<(ContractInfo, Vec<&str>
 testgen::inspect(dir) -> Result<ContractInfo>;
 testgen::build_budget_test(&info, entrypoint) -> Result<String>;
 testgen::build_init_once_test(&info) -> String;
+testgen::build_upgrade_test(&info) -> String;
+testgen::build_bench(&info) -> String;
+testgen::ensure_bench_target(&manifest) -> Option<String>;
+testgen::write_bench_files(dir, &info, force) -> Result<Vec<&str>>;
+testgen::build_roundtrip_tests(&info) -> String;
+testgen::upgrade::detect_upgrade_entrypoint(&methods) -> Option<UpgradeEntrypoint>;
+testgen::containers::find_container_args(&methods) -> Vec<ContainerArg>;
+testgen::candidates(root, &members) -> Vec<Candidate>;
+testgen::resolve(requested, &candidates) -> Result<Selection>;
 testgen::detect::detect_init_method(&methods) -> Option<MethodInfo>;
 ```
 

@@ -26,8 +26,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   with an upgrade entrypoint: it writes state, upgrades, and asserts the state
   survived. The test ships `#[ignore]`d and documents how to point it at a real
   v2 wasm (#234)
+- `soroban-forge test-init --bench` emits criterion benchmarks under `benches/`
+  and adds the `[[bench]]` target to `Cargo.toml`. Where `--budget` gates a
+  ceiling, these track entrypoint cost over time (#235)
 
 ### Changed
+- `test-init --bench` is no longer an alias for `--budget`. It now emits
+  criterion benchmarks; use `--budget` for the CPU/memory ceiling test (#235)
 - `soroban-forge new --force` asks for confirmation before overwriting an
   existing directory. `--yes`, `--json` and non-interactive sessions skip the
   question, so scripts and CI are unaffected

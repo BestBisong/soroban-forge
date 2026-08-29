@@ -13,17 +13,24 @@ Soroban contract project and it generates
 | `tests/forge_init_once.rs` | (when an initialize-style entrypoint is detected) asserts a second call to it is rejected |
 | `tests/forge_budget.rs` | (with `--budget`) benchmark measuring one entrypoint's CPU instructions and memory via `env.cost_estimate().budget()`, asserting an upper bound |
 | `tests/forge_upgrade.rs` | (when an upgrade entrypoint is detected) writes state, upgrades the contract, and asserts the state survived |
+| `benches/forge_bench.rs` | (with `--bench`) criterion benchmarks, one per entrypoint, for tracking cost over time |
 | `fuzz/Cargo.toml`      | (with `--fuzz`) cargo-fuzz workspace manifest |
 | `fuzz/fuzz_targets/fuzz_target_1.rs` | (with `--fuzz`) property-based fuzzer feeding arbitrary values into detected contract methods |
 
 Pass `--prop` (or `--invariant`/`--property`) to `test-init` to generate the
 property-based invariant harness, and `--fuzz` to emit a cargo-fuzz target.
 
-`--budget [ENTRYPOINT]` (alias `--bench`) emits the budget test, measuring the
-named entrypoint or the first one detected. It starts at Soroban's
-per-transaction ceilings (100M CPU instructions, 40 MiB); run
-`cargo test --test forge_budget -- --nocapture` to see the real cost and
-tighten the constants so a regression fails the test.
+`--budget [ENTRYPOINT]` emits the budget test, measuring the named entrypoint or
+the first one detected. It starts at Soroban's per-transaction ceilings (100M
+CPU instructions, 40 MiB); run `cargo test --test forge_budget -- --nocapture`
+to see the real cost and tighten the constants so a regression fails the test.
+
+`--bench` emits criterion benchmarks under `benches/` and adds the `[[bench]]`
+target to `Cargo.toml`. Where the budget test gates a ceiling, these track cost
+over time — see [docs/testing-guide.md](../../docs/testing-guide.md#benchmarks-criterion).
+
+> `--bench` was previously an alias for `--budget`. It now selects criterion
+> benchmarks; use `--budget` for the ceiling test.
 
 `--contract <name>` targets one member of a multi-contract workspace, matched by
 package name, crate name or directory. A workspace with more than one contract
@@ -73,6 +80,9 @@ testgen::inspect(dir) -> Result<ContractInfo>;
 testgen::build_budget_test(&info, entrypoint) -> Result<String>;
 testgen::build_init_once_test(&info) -> String;
 testgen::build_upgrade_test(&info) -> String;
+testgen::build_bench(&info) -> String;
+testgen::ensure_bench_target(&manifest) -> Option<String>;
+testgen::write_bench_files(dir, &info, force) -> Result<Vec<&str>>;
 testgen::upgrade::detect_upgrade_entrypoint(&methods) -> Option<UpgradeEntrypoint>;
 testgen::candidates(root, &members) -> Vec<Candidate>;
 testgen::resolve(requested, &candidates) -> Result<Selection>;

@@ -16,6 +16,7 @@
 //! contract declares a `__constructor`, sensible default arguments are
 //! generated for its registration in the smoke test.
 
+pub mod bench;
 pub mod detect;
 pub mod target;
 pub mod upgrade;
@@ -27,6 +28,7 @@ use soroban_forge_core::render::{render_str, Vars};
 use soroban_forge_core::{ForgeContext, ForgeError, ForgePlugin, Result};
 
 pub use detect::{inspect, ContractInfo};
+pub use bench::{build_bench, ensure_bench_target};
 pub use target::{candidates, resolve, Candidate, Selection};
 pub use upgrade::build_upgrade_test;
 
@@ -454,6 +456,50 @@ if [ "${1:-}" = "--html" ]; then
     echo "HTML report written to target/llvm-cov/html/index.html"
 fi
 "#;
+
+/// Write the criterion bench target into `dir/benches/forge_bench.rs` and add
+/// the `[[bench]]` section to the project's `Cargo.toml` (#235).
+///
+/// Returns the files touched, relative to `dir`. `Cargo.toml` is only listed
+/// when it actually changed — re-running `--bench` leaves an already-declared
+/// target alone rather than appending a duplicate section.
+pub fn write_bench_files(dir: &Path, info: &ContractInfo, force: bool) -> Result<Vec<&'static str>> {
+    let contents = build_bench(info);
+    if contents.is_empty() {
+        return Err(ForgeError::InvalidArgument(format!(
+            "--bench found no entrypoints to benchmark in {}",
+            dir.display()
+        )));
+    }
+
+    let mut written = Vec::new();
+
+    let rel = "benches/forge_bench.rs";
+    let path = dir.join(rel);
+    if path.exists() && !force {
+        return Err(ForgeError::AlreadyExists(path));
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(ForgeError::io(format!("creating {}", parent.display())))?;
+    }
+    std::fs::write(&path, contents)
+        .map_err(ForgeError::io(format!("writing {}", path.display())))?;
+    written.push(rel);
+
+    // Without the `[[bench]]` target and the criterion dev-dependency,
+    // `cargo bench` never picks the file up.
+    let manifest_path = dir.join("Cargo.toml");
+    let manifest = std::fs::read_to_string(&manifest_path)
+        .map_err(ForgeError::io(format!("reading {}", manifest_path.display())))?;
+    if let Some(updated) = ensure_bench_target(&manifest) {
+        std::fs::write(&manifest_path, updated)
+            .map_err(ForgeError::io(format!("writing {}", manifest_path.display())))?;
+        written.push("Cargo.toml");
+    }
+
+    Ok(written)
+}
 
 /// Write the coverage script into `dir/scripts/coverage.sh`.
 pub fn write_coverage_script(dir: &Path, force: bool) -> Result<&'static str> {
@@ -1589,7 +1635,6 @@ impl ForgePlugin for TestgenPlugin {
             .arg(
                 Arg::new("budget")
                     .long("budget")
-                    .alias("bench")
                     .num_args(0..=1)
                     .default_missing_value("")
                     .value_name("ENTRYPOINT")
@@ -1606,6 +1651,12 @@ impl ForgePlugin for TestgenPlugin {
                     .long("contract")
                     .value_name("NAME")
                     .help("Target one contract in a multi-contract workspace, by package, crate or directory name"),
+            )
+            .arg(
+                Arg::new("bench")
+                    .long("bench")
+                    .action(ArgAction::SetTrue)
+                    .help("Emit criterion benchmarks under benches/ so entrypoint costs can be tracked over time"),
             )
     }
 
@@ -1693,6 +1744,26 @@ impl ForgePlugin for TestgenPlugin {
 
         let (info, written) = generate_with(&dir, &options)?;
         let (info, written) = generate_with_layout(&dir, matches.get_flag("force"), fuzz, layout)?;
+
+        // --bench: criterion benchmarks alongside the harness (#235).
+        //
+        // Emitted here rather than inside the generator for the same reason
+        // --coverage is: it writes outside the tests/ tree and edits the
+        // project manifest.
+        if matches.get_flag("bench") {
+            let bench_files = write_bench_files(&dir, &info, matches.get_flag("force"))?;
+            if !ctx.quiet && !ctx.json {
+                for rel in &bench_files {
+                    println!("wrote {rel}");
+                }
+                println!();
+                println!("to run the benchmarks:");
+                println!("  cargo bench                          # every entrypoint");
+                println!("  cargo bench -- --save-baseline main  # record a baseline");
+                println!("  cargo bench -- --baseline main       # compare against it");
+                println!();
+            }
+        }
 
         // --coverage: write the llvm-cov script alongside the harness.
         let coverage = matches.get_flag("coverage");

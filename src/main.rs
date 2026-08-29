@@ -15,6 +15,8 @@ fn main() {
         Box::new(soroban_forge_identity::IdentityPlugin),
         Box::new(soroban_forge_deploy::DeployPlugin),
         Box::new(soroban_forge_invoke::InvokePlugin),
+        Box::new(soroban_forge_network::NetworkPlugin),
+        Box::new(soroban_forge_optimize::OptimizePlugin),
     ];
 
     // Intercept `completions <shell>` before full dispatch so we have access

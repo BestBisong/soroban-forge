@@ -64,6 +64,18 @@ impl ForgeConfig {
         Ok(Some(config))
     }
 
+    /// Load config from an explicit file path (`--config`), erroring if the
+    /// file does not exist or fails to parse — unlike `load_from`, an
+    /// explicitly-named path is not optional.
+    pub fn load_from_path(path: &Path) -> Result<Self> {
+        let raw = std::fs::read_to_string(path)
+            .map_err(ForgeError::io(format!("reading {}", path.display())))?;
+        toml::from_str(&raw).map_err(|e| ForgeError::Config {
+            path: path.to_path_buf(),
+            message: e.to_string(),
+        })
+    }
+
     /// First configured author, if any.
     pub fn author(&self) -> Option<&str> {
         self.project.authors.first().map(String::as_str)
@@ -127,6 +139,30 @@ default_template = "token"
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join(CONFIG_FILE_NAME), "not [valid").unwrap();
         assert!(ForgeConfig::load_from(dir.path()).is_err());
+    }
+
+    #[test]
+    fn load_from_path_errors_on_missing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("nope.toml");
+        assert!(ForgeConfig::load_from_path(&missing).is_err());
+    }
+
+    #[test]
+    fn load_from_path_parses_explicit_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("custom.toml");
+        std::fs::write(&path, "[defaults]\ntimeout_secs = 30\n").unwrap();
+        let config = ForgeConfig::load_from_path(&path).unwrap();
+        assert_eq!(config.defaults.timeout_secs, Some(30));
+    }
+
+    #[test]
+    fn load_from_path_errors_on_invalid_toml() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("bad.toml");
+        std::fs::write(&path, "not [valid").unwrap();
+        assert!(ForgeConfig::load_from_path(&path).is_err());
     }
 }
 

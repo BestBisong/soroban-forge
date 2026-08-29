@@ -83,7 +83,7 @@ pub fn load_manifest(name: &str) -> Result<TemplateManifest> {
             let raw = file.contents_utf8().ok_or_else(|| {
                 ForgeError::Template(format!("{MANIFEST_FILE_NAME} is not UTF-8"))
             })?;
-            TemplateManifest::parse(raw, name)
+            manifest::parse_manifest(raw)
         }
         None => Ok(TemplateManifest::default()),
     }
@@ -1211,7 +1211,7 @@ mod tests {
 
     #[test]
     fn resolve_extra_vars_prefers_overrides_then_defaults() {
-        let manifest = TemplateManifest::parse(
+        let manifest = manifest::parse_manifest(
             r#"
 [[variable]]
 name = "token_symbol"

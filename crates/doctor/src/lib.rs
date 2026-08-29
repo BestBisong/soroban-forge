@@ -68,6 +68,23 @@ fn capture(cmd: &str, args: &[&str]) -> Option<String> {
     stdout.lines().next().map(|l| l.trim().to_string())
 }
 
+/// Like [`capture`], but runs the command with `dir` as its working
+/// directory. Needed for checks whose answer depends on the project — e.g.
+/// `rustup show active-toolchain` honours a local `rust-toolchain.toml`
+/// override or `RUSTUP_TOOLCHAIN` only when run from inside the project.
+fn capture_in(cmd: &str, args: &[&str], dir: &Path) -> Option<String> {
+    let output = std::process::Command::new(cmd)
+        .args(args)
+        .current_dir(dir)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    stdout.lines().next().map(|l| l.trim().to_string())
+}
+
 /// Parse `X.Y` out of a `tool X.Y.Z ...` version line and compare against a
 /// minimum. Unparseable versions count as too old.
 pub fn version_at_least(version_line: &str, min: (u32, u32)) -> bool {
@@ -247,6 +264,71 @@ pub fn docker_check() -> Check {
             .map(|o| o.status.success())
             .unwrap_or(false);
     classify_docker(version_line.as_deref(), daemon_running)
+}
+
+/// Extract the release channel from a toolchain name, e.g.
+/// `stable-x86_64-unknown-linux-gnu` -> `stable`. A name that does not start
+/// with a known channel word is a version-pinned toolchain (e.g.
+/// `1.84.0-x86_64-...`), reported as `"pinned"` rather than guessed at.
+fn channel_from_toolchain_name(name: &str) -> &'static str {
+    for channel in ["stable", "beta", "nightly"] {
+        if name.starts_with(channel) {
+            return channel;
+        }
+    }
+    "pinned"
+}
+
+/// Classify the resolved active toolchain into a report line (issue #109).
+///
+/// `rustup_line` is the first line of `rustup show active-toolchain`, run
+/// with the project directory as its working directory so a local
+/// `rust-toolchain.toml` override is honoured. When `rustup` itself is not
+/// on `PATH`, falls back to `rustc_version_line` (`rustc --version`) and
+/// infers the channel from the version string instead.
+pub fn classify_toolchain(rustup_line: Option<&str>, rustc_version_line: Option<&str>) -> Check {
+    if let Some(line) = rustup_line {
+        let toolchain = line.split_whitespace().next().unwrap_or(line);
+        let channel = channel_from_toolchain_name(toolchain);
+        return Check {
+            name: "toolchain",
+            status: Status::Pass,
+            detail: format!("{line} (channel: {channel})"),
+            fix: None,
+        };
+    }
+    match rustc_version_line {
+        Some(line) => {
+            let channel = if line.contains("nightly") {
+                "nightly"
+            } else if line.contains("beta") {
+                "beta"
+            } else {
+                "stable"
+            };
+            Check {
+                name: "toolchain",
+                status: Status::Pass,
+                detail: format!("{line} (channel: {channel}, rustup not found)"),
+                fix: None,
+            }
+        }
+        None => Check {
+            name: "toolchain",
+            status: Status::Warn,
+            detail: "could not determine active toolchain (rustc not found)".into(),
+            fix: Some("install Rust: https://rustup.rs"),
+        },
+    }
+}
+
+/// Report the active Rust toolchain and channel resolved for `project_dir`.
+///
+/// Thin system-touching wrapper around [`classify_toolchain`].
+pub fn toolchain_check(project_dir: &Path) -> Check {
+    let rustup_line = capture_in("rustup", &["show", "active-toolchain"], project_dir);
+    let rustc_line = capture("rustc", &["--version"]);
+    classify_toolchain(rustup_line.as_deref(), rustc_line.as_deref())
 }
 
 /// Classify a git identity probe into a report line (issue #71).
@@ -853,6 +935,7 @@ impl DoctorPlugin {
     /// than the rest of the report.
     fn gather_checks(&self, ctx: &ForgeContext, do_build: bool) -> Vec<Check> {
         let mut checks = run_checks_with_network(!ctx.offline);
+        checks.push(toolchain_check(&ctx.cwd)); // issue #109
         if ctx.offline {
             checks.push(Check {
                 name: "testnet RPC",
@@ -1235,6 +1318,55 @@ mod tests {
         assert_eq!(failure_count(&[check.clone()]), 0);
         assert!(check.detail.contains("not found"));
         assert!(check.fix.unwrap().contains("docs.docker.com"));
+    }
+
+    // ---- active toolchain (issue #109) ----
+
+    #[test]
+    fn toolchain_reports_stable_channel() {
+        let check = classify_toolchain(
+            Some("stable-x86_64-unknown-linux-gnu (default)"),
+            None,
+        );
+        assert_eq!(check.status, Status::Pass);
+        assert!(check.detail.contains("stable-x86_64-unknown-linux-gnu"));
+        assert!(check.detail.contains("channel: stable"));
+        assert!(check.fix.is_none());
+    }
+
+    #[test]
+    fn toolchain_reports_nightly_channel() {
+        let check = classify_toolchain(
+            Some("nightly-x86_64-pc-windows-msvc (overridden by '/proj/rust-toolchain.toml')"),
+            None,
+        );
+        assert!(check.detail.contains("channel: nightly"));
+    }
+
+    #[test]
+    fn toolchain_reports_pinned_version_when_not_a_named_channel() {
+        let check = classify_toolchain(Some("1.84.0-x86_64-unknown-linux-gnu"), None);
+        assert!(check.detail.contains("channel: pinned"));
+    }
+
+    #[test]
+    fn toolchain_falls_back_to_rustc_version_without_rustup() {
+        let check = classify_toolchain(None, Some("rustc 1.90.0-nightly (abc 2026-01-01)"));
+        assert_eq!(check.status, Status::Pass);
+        assert!(check.detail.contains("channel: nightly"));
+        assert!(check.detail.contains("rustup not found"));
+    }
+
+    #[test]
+    fn toolchain_warns_when_neither_tool_is_found() {
+        let check = classify_toolchain(None, None);
+        assert_eq!(check.status, Status::Warn);
+        assert!(check.fix.is_some());
+    }
+
+    #[test]
+    fn toolchain_is_not_auto_fixable() {
+        assert!(remedy(&fail("toolchain")).is_none());
     }
 
     // ---- git identity (issue #71) ----

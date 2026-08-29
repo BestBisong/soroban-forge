@@ -22,6 +22,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   multi-contract workspace, matched by package name, crate name or directory.
   A workspace with more than one contract and no `--contract` now stops and
   lists the candidates instead of generating a harness for every member (#233)
+- `soroban-forge test-init` now emits `tests/forge_upgrade.rs` for contracts
+  with an upgrade entrypoint: it writes state, upgrades, and asserts the state
+  survived. The test ships `#[ignore]`d and documents how to point it at a real
+  v2 wasm (#234)
 
 ### Changed
 - `soroban-forge new --force` asks for confirmation before overwriting an

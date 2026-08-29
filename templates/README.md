@@ -28,6 +28,7 @@ for the template format and how to add a new one.
 - `staking` — proportional reward staking with O(1) `acc_reward_per_share` accumulator
 - `streaming` — streams tokens linearly over time with cancel support
 - `subscription` — recurring payment charged once per elapsed interval
+- `timelock` — timelock controller for delayed execution and cancellation of queued calls
 - `vesting` — token vesting with cliff + linear release schedule
 - `wrapped-asset` — 1:1 wrapper token minted on deposit, burned on withdraw
 

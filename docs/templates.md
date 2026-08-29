@@ -12,6 +12,7 @@ List them at any time with `soroban-forge templates`:
 - `multisig` – M-of-N multisig account contract (`CustomAccountInterface`)
 - `nft` – NFT with per-token metadata and minting
 - `token` – SEP-41 fungible token (`soroban_sdk::token::TokenInterface`)
+- `timelock` – timelock controller for delayed execution and cancellation of queued calls
 - `vesting` – token vesting with cliff + linear release schedule
 
 ## Variables
@@ -79,6 +80,7 @@ description; `soroban-forge new <name> --template <t>` scaffolds one.
 | `atomic-swap`      | atomic two-party token swap with dual authorization              |
 | `governance`       | DAO governance with weighted voting, quorum and execution        |
 | `multisig`         | M-of-N multisig account contract (`CustomAccountInterface`)      |
+| `timelock`         | timelock controller for delayed execution and cancellation       |
 
 Every template ships a `README.md` with build/deploy instructions and unit
 tests that pass out of the box:
@@ -130,6 +132,13 @@ The seller initializes the auction with `start_price`, `floor_price`, and
 from `start_price` to `floor_price` over the duration. The first buyer to call
 `buy` purchases the asset at the current price, which immediately transfers the
 asset to the buyer and the payment to the seller.
+
+## Timelock controller
+
+Enforces a minimum time delay between queueing an operation (contract call, function,
+arguments, and salt) and executing it. Proposers queue calls with `delay >= min_delay`,
+and executors trigger the call once the delay has elapsed. Proposers or admins can
+cancel queued operations before execution.
 
 ## Adding a template
 

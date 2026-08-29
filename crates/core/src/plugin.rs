@@ -47,6 +47,7 @@ impl ForgeContext {
         yes: bool,
     ) -> Result<Self> {
         Self::with_options(cwd, verbose, quiet, json, yes, false, None, None, None)
+        Self::with_options(cwd, verbose, quiet, json, yes, false, None, None)
     }
 
     /// Build a context with all global invocation controls.

@@ -149,6 +149,12 @@ pub fn dispatch(plugins: &[Box<dyn ForgePlugin>], matches: &ArgMatches) -> Resul
     let (name, sub_matches) = matches
         .subcommand()
         .ok_or_else(|| ForgeError::InvalidArgument("a subcommand is required".into()))?;
+    let name = match name {
+        "n" => "new",
+        "ti" => "test-init",
+        "dr" => "doctor",
+        other => other,
+    };
 
     // Try a built-in plugin first.
     if let Some(plugin) = plugins.iter().find(|p| p.name() == name) {
@@ -169,12 +175,11 @@ pub fn dispatch(plugins: &[Box<dyn ForgePlugin>], matches: &ArgMatches) -> Resul
             yes,
             offline,
             matches.get_one::<String>("log-level").cloned(),
-        )?;
-        ctx.progress(&format!("running {name}"));
             matches
                 .get_one::<String>("timeout")
                 .and_then(|value| value.parse::<u64>().ok()),
         )?;
+        ctx.progress(&format!("running {name}"));
         log::debug!("dispatching to plugin `{}`", plugin.name());
         plugin.pre_run(sub_matches, &ctx)?;
         let result = plugin.run(sub_matches, &ctx);

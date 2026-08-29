@@ -18,8 +18,25 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - `soroban-forge test-init` now emits `tests/forge_init_once.rs` whenever the
   contract exposes an initialize-style entrypoint, asserting a second call is
   rejected
+- `soroban-forge test-init --contract <name>` targets one member of a
+  multi-contract workspace, matched by package name, crate name or directory.
+  A workspace with more than one contract and no `--contract` now stops and
+  lists the candidates instead of generating a harness for every member (#233)
+- `soroban-forge test-init` now emits `tests/forge_upgrade.rs` for contracts
+  with an upgrade entrypoint: it writes state, upgrades, and asserts the state
+  survived. The test ships `#[ignore]`d and documents how to point it at a real
+  v2 wasm (#234)
+- `soroban-forge test-init --bench` emits criterion benchmarks under `benches/`
+  and adds the `[[bench]]` target to `Cargo.toml`. Where `--budget` gates a
+  ceiling, these track entrypoint cost over time (#235)
+- `soroban-forge test-init` now emits `tests/forge_roundtrip.rs` for
+  entrypoints taking `Option`, `Vec` or `Map` arguments, passing empty,
+  single- and multi-element values through each — container arguments are
+  frequently mis-encoded, the empty case most of all (#236)
 
 ### Changed
+- `test-init --bench` is no longer an alias for `--budget`. It now emits
+  criterion benchmarks; use `--budget` for the CPU/memory ceiling test (#235)
 - `soroban-forge new --force` asks for confirmation before overwriting an
   existing directory. `--yes`, `--json` and non-interactive sessions skip the
   question, so scripts and CI are unaffected

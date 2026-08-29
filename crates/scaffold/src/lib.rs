@@ -17,14 +17,6 @@
 
 pub mod manifest;
 
-use std::collections::BTreeMap;
-use std::io::{IsTerminal, Write};
-//! Available variables: `project_name`, `crate_name`, `author`, `sdk_version`,
-//! plus any extra variables a template declares in its `template.toml` (see
-//! [`manifest`]).
-
-mod manifest;
-
 pub use manifest::{TemplateManifest, TemplateVariable};
 
 use std::collections::BTreeMap;
@@ -35,8 +27,6 @@ use clap::{Arg, ArgAction, ArgMatches, Command};
 use include_dir::{include_dir, Dir};
 use soroban_forge_core::render::{render_str, Vars};
 use soroban_forge_core::{ForgeContext, ForgeError, ForgePlugin, Result};
-
-pub use manifest::{TemplateManifest, TemplateVariable};
 
 static TEMPLATES: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../../templates");
 
@@ -93,7 +83,7 @@ pub fn load_manifest(name: &str) -> Result<TemplateManifest> {
             let raw = file.contents_utf8().ok_or_else(|| {
                 ForgeError::Template(format!("{MANIFEST_FILE_NAME} is not UTF-8"))
             })?;
-            TemplateManifest::parse(raw, name)
+            manifest::parse_manifest(raw)
         }
         None => Ok(TemplateManifest::default()),
     }
@@ -330,9 +320,19 @@ pub fn resolve_extra_vars(
         let value = if let Some(v) = overrides.get(&var.name) {
             v.clone()
         } else if interactive {
-            prompt_for(&var.prompt, &var.default)?
+            let default = var.default.as_deref().unwrap_or("");
+            prompt_for(var.prompt_text(), default)?
         } else {
-            var.default.clone()
+            match var.default.clone() {
+                Some(default) => default,
+                None if var.required => {
+                    return Err(ForgeError::InvalidArgument(format!(
+                        "template variable `{}` is required but was not supplied",
+                        var.name
+                    )));
+                }
+                None => String::new(),
+            }
         };
         vars.insert(var.name.clone(), value);
     }
@@ -652,7 +652,6 @@ fn render_dir_fs(dir: &Path, source_root: &Path, dest: &Path, vars: &Vars) -> Re
             if is_manifest(rel) {
                 continue; // template.toml configures generation; it is not output
         }
-            }
 
             // Apply variable substitution to the relative path (including each
             // component), then strip a trailing .hbs suffix if present.
@@ -690,6 +689,7 @@ fn render_dir_fs(dir: &Path, source_root: &Path, dest: &Path, vars: &Vars) -> Re
         }
     }
     Ok(())
+}
 
 /// True for the template's own `template.toml`, which lives at the root of a
 /// template and drives generation rather than being part of the output.
@@ -1217,7 +1217,7 @@ mod tests {
 
     #[test]
     fn resolve_extra_vars_prefers_overrides_then_defaults() {
-        let manifest = TemplateManifest::parse(
+        let manifest = manifest::parse_manifest(
             r#"
 [[variable]]
 name = "token_symbol"
@@ -1252,7 +1252,6 @@ default = "MYT"
         assert_eq!(names, vec!["token_name", "token_symbol", "token_decimals"]);
     }
 
-    fn lists_all_three_templates() {
     #[test]
     fn lists_all_bundled_templates() {
         assert_eq!(

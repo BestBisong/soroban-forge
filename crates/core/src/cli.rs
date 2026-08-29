@@ -175,12 +175,11 @@ pub fn dispatch(plugins: &[Box<dyn ForgePlugin>], matches: &ArgMatches) -> Resul
             yes,
             offline,
             matches.get_one::<String>("log-level").cloned(),
-        )?;
-        ctx.progress(&format!("running {name}"));
             matches
                 .get_one::<String>("timeout")
                 .and_then(|value| value.parse::<u64>().ok()),
         )?;
+        ctx.progress(&format!("running {name}"));
         log::debug!("dispatching to plugin `{}`", plugin.name());
         plugin.pre_run(sub_matches, &ctx)?;
         let result = plugin.run(sub_matches, &ctx);

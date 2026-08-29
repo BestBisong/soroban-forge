@@ -151,6 +151,7 @@ pub fn inspect(dir: &Path) -> Result<ContractInfo> {
         has_token_deps,
         token_param_names,
         init_method,
+          has_persistent_storage: detect_persistent_storage(&source),
     })
 }
 
@@ -169,8 +170,6 @@ pub fn detect_init_method(methods: &[MethodInfo]) -> Option<MethodInfo> {
         .iter()
         .find_map(|candidate| methods.iter().find(|m| m.name == *candidate))
         .cloned()
-        has_persistent_storage: detect_persistent_storage(&source),
-    })
 }
 
 /// True when the source touches persistent storage, e.g.
@@ -1092,6 +1091,8 @@ impl Demo {
             init.args,
             vec![("admin".to_string(), "Address".to_string())]
         );
+      }
+
     #[test]
     fn detects_persistent_storage_usage() {
         assert!(detect_persistent_storage(

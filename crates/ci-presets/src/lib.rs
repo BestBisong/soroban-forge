@@ -17,6 +17,7 @@ const MATRIX_WORKFLOW: &str = "build-test-matrix.yml";
 const DEPLOY_WORKFLOW: &str = "testnet-deploy.yml";
 const RELEASE_WORKFLOW: &str = "release.yml";
 const SECURITY_SCAN_WORKFLOW: &str = "security-scan.yml";
+const COVERAGE_WORKFLOW: &str = "coverage.yml";
 const DENY_TOML: &str = "deny.toml";
 const HEALTHCHECK_WORKFLOW: &str = "testnet-healthcheck.yml";
 pub const DEFAULT_MSRV: &str = "1.84";
@@ -69,6 +70,7 @@ fn project_name(dir: &Path, ctx: &ForgeContext) -> String {
 pub struct GenerateOptions {
     pub deploy: bool,
     pub security_scan: bool,
+    pub coverage: bool,
     pub healthcheck: bool,
     pub matrix: bool,
     pub msrv: Option<String>,
@@ -79,7 +81,7 @@ pub fn generate(
     dir: &Path,
     provider: &str,
     project_name: &str,
-    deploy: bool,
+    _deploy: bool,
     release: bool,
     opts: &GenerateOptions,
     force: bool,
@@ -114,6 +116,9 @@ pub fn generate(
             if opts.security_scan {
                 list.push((SECURITY_SCAN_WORKFLOW, None));
                 list.push((DENY_TOML, Some(".")));
+            }
+            if opts.coverage {
+                list.push((COVERAGE_WORKFLOW, None));
             }
             if opts.healthcheck {
                 list.push((HEALTHCHECK_WORKFLOW, None));
@@ -213,6 +218,12 @@ pub fn format_report(
              Enable Dependabot under: repo -> Settings -> Code security\n",
         );
     }
+    if opts.coverage {
+        out.push_str(
+            "\ncoverage: upload test results to Codecov by adding a repository secret named\n\
+             CODECOV_TOKEN. If that secret is missing, the workflow skips the upload gracefully.\n",
+        );
+    }
     if opts.healthcheck {
         out.push_str(
             "\ntestnet-healthcheck: the smoke entry point defaults to `version` then `ping`.\n\
@@ -255,6 +266,7 @@ impl ForgePlugin for CiPresetsPlugin {
             )
             .arg(Arg::new("deploy").long("deploy").action(ArgAction::SetTrue))
             .arg(Arg::new("security-scan").long("security-scan").action(ArgAction::SetTrue))
+            .arg(Arg::new("coverage").long("coverage").action(ArgAction::SetTrue))
             .arg(Arg::new("healthcheck").long("healthcheck").action(ArgAction::SetTrue))
             .arg(Arg::new("matrix").long("matrix").action(ArgAction::SetTrue))
             .arg(Arg::new("msrv").long("msrv").value_name("VERSION"))
@@ -274,6 +286,7 @@ impl ForgePlugin for CiPresetsPlugin {
         let opts = GenerateOptions {
             deploy: matches.get_flag("deploy"),
             security_scan: matches.get_flag("security-scan"),
+            coverage: matches.get_flag("coverage"),
             healthcheck: matches.get_flag("healthcheck"),
             matrix: matches.get_flag("matrix"),
             msrv: matches.get_one::<String>("msrv").cloned(),
@@ -314,6 +327,53 @@ mod tests {
 
     fn deploy_opts() -> GenerateOptions {
         GenerateOptions { deploy: true, ..Default::default() }
+    }
+
+    #[test]
+    fn coverage_defaults_to_false() {
+        assert!(!GenerateOptions::default().coverage);
+    }
+
+    #[test]
+    fn coverage_flag_is_parsed() {
+        let matches = CiPresetsPlugin
+            .command()
+            .try_get_matches_from(["ci-init", "--coverage"])
+            .unwrap();
+        assert!(matches.get_flag("coverage"));
+    }
+
+    #[test]
+    fn github_preset_generates_coverage_only_when_enabled() {
+        let default_dir = tempfile::tempdir().unwrap();
+        let default_written = generate(
+            default_dir.path(),
+            "github",
+            "my-contract",
+            false,
+            false,
+            &base_opts(),
+            false,
+        )
+        .unwrap();
+        assert_eq!(default_written, vec![".github/workflows/build-test.yml", ".github/workflows/contract-size.yml"]);
+        assert!(!default_dir.path().join(".github/workflows/coverage.yml").exists());
+
+        let coverage_dir = tempfile::tempdir().unwrap();
+        let coverage_written = generate(
+            coverage_dir.path(),
+            "github",
+            "my-contract",
+            false,
+            false,
+            &GenerateOptions { coverage: true, ..Default::default() },
+            false,
+        )
+        .unwrap();
+        assert!(coverage_written.iter().any(|p| p == ".github/workflows/coverage.yml"));
+        let contents = std::fs::read_to_string(coverage_dir.path().join(".github/workflows/coverage.yml")).unwrap();
+        assert!(contents.contains("codecov/codecov-action@v4"));
+        assert!(contents.contains("cargo llvm-cov"));
     }
 
     #[test]

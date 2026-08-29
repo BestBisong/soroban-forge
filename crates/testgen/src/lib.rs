@@ -857,6 +857,21 @@ pub fn build_init_once_test(info: &ContractInfo) -> String {
         "use {}::{{ {} }};\n",
         info.crate_name,
         contract_use_list(info)
+    ));
+
+    for ct in &info.contract_types {
+        let mut vars = Vars::new();
+        vars.insert("contract_type".into(), ct.clone());
+        vars.insert("fn_name".into(), to_snake_case(ct));
+        vars.insert("contract_args".into(), info.constructor_args.clone());
+        vars.insert("init_method".into(), init.name.clone());
+        vars.insert("init_args".into(), client_call_args(init));
+        out.push_str(&render_str(INIT_ONCE_TEST_FN, &vars));
+    }
+
+    out
+}
+
 /// Render the `tests/forge_ttl.rs` content: persistent-storage TTL /
 /// rent-extension tests. Returns an empty string when the contract never
 /// touches persistent storage.
@@ -1225,7 +1240,8 @@ pub fn generate_workspace(dir: &Path, force: bool, fuzz: bool) -> Result<Vec<Mem
 pub fn generate_workspace_with(
     dir: &Path,
     options: &GenerateOptions,
-    generate_workspace_with_layout(dir, force, fuzz, TestLayout::default())
+) -> Result<Vec<MemberHarness>> {
+    generate_workspace_with_layout(dir, options.force, options.fuzz, TestLayout::default())
 }
 
 /// [`generate_workspace`] with an explicit test layout.
@@ -1250,7 +1266,6 @@ pub fn generate_workspace_with_layout(
             .unwrap_or(&member_dir)
             .to_string_lossy()
             .into_owned();
-        let outcome = match generate_with(&member_dir, options) {
         let outcome = match generate_with_layout(&member_dir, force, fuzz, layout) {
             Ok(pair) => Ok(pair),
             Err(e) => Err(e.to_string()),
@@ -1351,26 +1366,9 @@ pub fn generate_with_layout(
     let snapshot = build_snapshot_test(&info);
     let event_test = build_event_test(&info);
     let init_once = build_init_once_test(&info);
-
-    let mut files: Vec<(&'static str, String)> = vec![
-        ("tests/common/mod.rs", FIXTURES_RS.to_string()),
-        ("tests/forge_smoke.rs", smoke),
-        ("tests/forge_invariant.rs", invariant),
-        ("tests/forge_snapshots.rs", snapshot),
-    ];
-
-    // Error-path tests (#97)
     let err_tests = build_error_path_tests(&info);
-    if !err_tests.is_empty() {
-        files.push(("tests/forge_error_paths.rs", err_tests));
-    }
-    // Reentrancy test (#98)
     let reentry = build_reentrancy_test(&info);
-    if !reentry.is_empty() {
-        files.push(("tests/forge_reentrancy.rs", reentry));
-    }
-    if !event_test.is_empty() {
-        files.push(("tests/forge_events.rs", event_test));
+
     let ttl_test = build_ttl_test(&info);
     // Empty unless the contract exposes an upgrade entrypoint (#234).
     let upgrade_test = build_upgrade_test(&info);
@@ -1386,6 +1384,12 @@ pub fn generate_with_layout(
             files.push(("tests/forge_snapshots.rs", snapshot));
             if !event_test.is_empty() {
                 files.push(("tests/forge_events.rs", event_test));
+            }
+            if !err_tests.is_empty() {
+                files.push(("tests/forge_error_paths.rs", err_tests));
+            }
+            if !reentry.is_empty() {
+                files.push(("tests/forge_reentrancy.rs", reentry));
             }
             if !ttl_test.is_empty() {
                 files.push(("tests/forge_ttl.rs", ttl_test));
@@ -1405,6 +1409,12 @@ pub fn generate_with_layout(
             ];
             if !event_test.is_empty() {
                 sections.push(("events", event_test));
+            }
+            if !err_tests.is_empty() {
+                sections.push(("error_paths", err_tests));
+            }
+            if !reentry.is_empty() {
+                sections.push(("reentrancy", reentry));
             }
             if !ttl_test.is_empty() {
                 sections.push(("ttl", ttl_test));
@@ -1649,7 +1659,9 @@ impl ForgePlugin for TestgenPlugin {
                     .default_missing_value("")
                     .value_name("ENTRYPOINT")
                     .help("Emit a benchmark test measuring an entrypoint's CPU/memory cost [default: the first entrypoint]"),
-                Arg::new("layout")
+              )
+              .arg(
+                  Arg::new("layout")
                     .long("layout")
                     .value_name("LAYOUT")
                     .default_value("tests")
@@ -1713,9 +1725,6 @@ impl ForgePlugin for TestgenPlugin {
         };
         let fuzz = options.fuzz;
 
-        // Workspace root: generate a harness per member.
-        if is_workspace(&dir) {
-            let results = generate_workspace_with(&dir, &options)?;
         let fuzz = matches.get_flag("fuzz");
         let layout = TestLayout::parse(matches.get_one::<String>("layout").expect("has default"))?;
 
@@ -1752,7 +1761,6 @@ impl ForgePlugin for TestgenPlugin {
             return Ok(());
         }
 
-        let (info, written) = generate_with(&dir, &options)?;
         let (info, written) = generate_with_layout(&dir, matches.get_flag("force"), fuzz, layout)?;
 
         // --bench: criterion benchmarks alongside the harness (#235).

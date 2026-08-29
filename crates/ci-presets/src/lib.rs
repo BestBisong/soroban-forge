@@ -3,12 +3,12 @@
 //! `soroban-forge ci-init --provider github` — writes CI/CD workflows for a
 //! Soroban contract project.
 
-use std::path::Path;
 use clap::{Arg, ArgAction, ArgMatches, Command};
 use include_dir::{include_dir, Dir};
 use serde::Deserialize;
 use soroban_forge_core::render::{render_str, Vars};
 use soroban_forge_core::{ForgeContext, ForgeError, ForgePlugin, Result};
+use std::path::Path;
 
 static PRESETS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../../presets");
 
@@ -34,7 +34,7 @@ pub fn available_providers() -> Vec<&'static str> {
 pub fn output_dir(provider: &str) -> &'static str {
     match provider {
         "github" => ".github/workflows",
-        "gitlab" | "bitbucket" | "azure" => ".",
+        "gitlab" | "bitbucket" | "azure" | "woodpecker" => ".",
         "circleci" => ".circleci",
         _ => unreachable!("validated against available_providers()"),
     }
@@ -133,6 +133,7 @@ pub fn generate(
         "bitbucket" => vec![("bitbucket-pipelines.yml", None)],
         "azure" => vec![("azure-pipelines.yml", None)],
         "circleci" => vec![("config.yml", None)],
+        "woodpecker" => vec![(".woodpecker.yml", None)],
         _ => {
             return Err(ForgeError::InvalidArgument(format!(
                 "unknown provider `{provider}` (available: {})",
@@ -251,7 +252,7 @@ impl ForgePlugin for CiPresetsPlugin {
                 Arg::new("provider")
                     .long("provider")
                     .default_value("github")
-                    .help("CI provider (`github`, `gitlab`, `circleci`, `azure`, or `bitbucket`)"),
+                    .help("CI provider (`github`, `gitlab`, `circleci`, `azure`, `bitbucket`, or `woodpecker`)"),
             )
             .arg(Arg::new("deploy").long("deploy").action(ArgAction::SetTrue))
             .arg(Arg::new("security-scan").long("security-scan").action(ArgAction::SetTrue))
@@ -312,6 +313,7 @@ mod tests {
         GenerateOptions::default()
     }
 
+    #[allow(dead_code)]
     fn deploy_opts() -> GenerateOptions {
         GenerateOptions { deploy: true, ..Default::default() }
     }
@@ -324,6 +326,7 @@ mod tests {
         assert!(providers.contains(&"circleci"));
         assert!(providers.contains(&"bitbucket"));
         assert!(providers.contains(&"azure"));
+        assert!(providers.contains(&"woodpecker"));
     }
 
     #[test]
@@ -343,5 +346,18 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let written = generate(dir.path(), "bitbucket", "my-contract", false, false, &base_opts(), false).unwrap();
         assert_eq!(written, vec!["bitbucket-pipelines.yml"]);
+    }
+
+    #[test]
+    fn writes_woodpecker_preset() {
+        let dir = tempfile::tempdir().unwrap();
+        let written = generate(dir.path(), "woodpecker", "my-contract", false, false, &base_opts(), false).unwrap();
+        assert_eq!(written, vec![".woodpecker.yml"]);
+        let contents = std::fs::read_to_string(dir.path().join(".woodpecker.yml")).unwrap();
+        assert!(contents.contains("my-contract"));
+        assert!(contents.contains("cargo test"));
+        assert!(contents.contains("cargo build --target wasm32v1-none --release"));
+        assert!(contents.contains("cargo clippy --all-targets -- -D warnings"));
+        assert!(!contents.contains("{{project_name}}"));
     }
 }

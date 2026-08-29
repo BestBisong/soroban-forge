@@ -7,6 +7,22 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Added
+- `soroban-forge new --license apache-2.0|mit|unlicense` writes a LICENSE
+  file (author and year filled in) and sets the matching `license` field in
+  the generated `Cargo.toml`. Omitting the flag keeps prior behaviour: no
+  LICENSE file, no `license` field (#221)
+- `soroban-forge new --devcontainer` adds an optional `.devcontainer/` with
+  Rust, the `wasm32v1-none` target and `stellar-cli` preinstalled to the same
+  minimum versions `doctor` checks for, so a scaffolded project is
+  Codespaces-ready; documented in the generated project's README (#222)
+- CI now scaffolds every bundled template and runs `cargo test` +
+  `stellar contract build` against it, so a broken template fails the build.
+  The template list comes from `new --list-templates --json`, not a
+  hardcoded array (#223)
+- Templates now share their `.gitignore`, `rust-toolchain.toml` and
+  `Cargo.toml` release profile through `templates/_partials/`, composed at
+  generation time; a template opts out simply by shipping its own copy of a
+  file (#224)
 - `soroban-forge new --var NAME=VALUE` (repeatable) plus support for a
   per-template `template.toml` manifest declaring custom variables. Missing
   values are prompted for when the session is interactive; non-interactive runs

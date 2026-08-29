@@ -11,6 +11,14 @@ rust-version.workspace = true
 name = "soroban-forge"
 path = "src/main.rs"
 
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/soroban-forge-{ version }-{ target }{ archive-suffix }"
+bin-dir = "{ bin }{ binary-ext }"
+pkg-fmt = "tgz"
+
+[package.metadata.binstall.overrides.x86_64-pc-windows-msvc]
+pkg-fmt = "zip"
+
 [dependencies]
 soroban-forge-core = { path = "crates/core" }
 soroban-forge-scaffold = { path = "crates/scaffold" }

@@ -185,6 +185,7 @@ pub fn template_description(name: &str) -> Option<&'static str> {
         "merkle-airdrop" => Some("one-claim-per-address airdrop verified against a merkle root"),
         "multisig" => Some("M-of-N multisig account contract (CustomAccountInterface)"),
         "nft" => Some("NFT (non-fungible token) with per-token metadata and minting"),
+        "pausable" => Some("admin-controlled circuit breaker gating guarded entrypoints"),
         "nft-marketplace" => Some("NFT marketplace for listing, buying, and cancelling sales with configurable fees"),
         "oracle-consumer" => Some("consumes price data from an external oracle (e.g. Reflector)"),
         "payment-splitter" => Some("splits received funds between payees by fixed shares"),

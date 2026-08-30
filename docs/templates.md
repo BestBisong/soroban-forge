@@ -10,6 +10,7 @@ List them at any time with `soroban-forge templates`:
 - `hello-world` – minimal greeter contract (recommended starting point)
 - `multisig` – M-of-N multisig account contract (`CustomAccountInterface`)
 - `nft` – NFT with per-token metadata and minting
+- `prediction-market` – binary outcome market with oracle resolution and parimutuel payouts
 - `token` – SEP-41 fungible token (`soroban_sdk::token::TokenInterface`)
 - `vesting` – token vesting with cliff + linear release schedule
 
@@ -77,6 +78,7 @@ description; `soroban-forge new <name> --template <t>` scaffolds one.
 | `atomic-swap`      | atomic two-party token swap with dual authorization              |
 | `governance`       | DAO governance with weighted voting, quorum and execution        |
 | `multisig`         | M-of-N multisig account contract (`CustomAccountInterface`)      |
+| `prediction-market`| binary outcome market with oracle resolution and parimutuel payouts |
 
 Every template ships a `README.md` with build/deploy instructions and unit
 tests that pass out of the box:
@@ -120,6 +122,29 @@ reproduce are:
 
 The `leaf` entrypoint is public so a script can check its own hashing against
 the contract's before publishing a root.
+
+## Prediction market
+
+A binary YES/NO market, staked in a SEP-41 token. Both sides escrow into one
+pool, so the losing side's stakes are what pays the winning side's profit:
+
+```text
+payout = stake * total_pool / winning_pool
+```
+
+`resolve` is gated on a single oracle address fixed at deploy time and can only
+be called once. It takes the caller explicitly and compares it to the stored
+oracle rather than authorizing that oracle directly — the address that signed is
+checked against the designated one, so a wrong signer is rejected instead of
+silently accepted. `claim` needs no authorization: funds always go to the
+staker, so triggering someone else's payout gains nothing.
+
+Payouts are floor-divided, leaving up to `winning_pool - 1` units in the
+contract as rounding dust. Two edges are deliberately left open, and the
+generated README says so: there is no staking deadline, so the market accepts
+stakes until the moment it resolves; and if the oracle resolves to an outcome
+nobody backed there are no winners, so the pool stays put and every `claim`
+reports `NothingToClaim`.
 
 ## Adding a template
 

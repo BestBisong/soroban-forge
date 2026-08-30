@@ -7,6 +7,25 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Added
+- New `pausable` template — a minimal circuit breaker: an admin fixed at
+  deploy time can `pause`/`unpause`, and guarded entrypoints reject calls with
+  `Error::Paused` while paused
+- `soroban-forge new --license apache-2.0|mit|unlicense` writes a LICENSE
+  file (author and year filled in) and sets the matching `license` field in
+  the generated `Cargo.toml`. Omitting the flag keeps prior behaviour: no
+  LICENSE file, no `license` field (#221)
+- `soroban-forge new --devcontainer` adds an optional `.devcontainer/` with
+  Rust, the `wasm32v1-none` target and `stellar-cli` preinstalled to the same
+  minimum versions `doctor` checks for, so a scaffolded project is
+  Codespaces-ready; documented in the generated project's README (#222)
+- CI now scaffolds every bundled template and runs `cargo test` +
+  `stellar contract build` against it, so a broken template fails the build.
+  The template list comes from `new --list-templates --json`, not a
+  hardcoded array (#223)
+- Templates now share their `.gitignore`, `rust-toolchain.toml` and
+  `Cargo.toml` release profile through `templates/_partials/`, composed at
+  generation time; a template opts out simply by shipping its own copy of a
+  file (#224)
 - `soroban-forge new --var NAME=VALUE` (repeatable) plus support for a
   per-template `template.toml` manifest declaring custom variables. Missing
   values are prompted for when the session is interactive; non-interactive runs
@@ -33,6 +52,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   entrypoints taking `Option`, `Vec` or `Map` arguments, passing empty,
   single- and multi-element values through each — container arguments are
   frequently mis-encoded, the empty case most of all (#236)
+- `flash-loan` template — an uncollateralized loan lent and repaid inside one
+  transaction. The pool calls back into the borrower and then checks its own
+  balance, so a borrower that does not repay principal + fee has the funding
+  transfer unwound with the panic. Ships a `README.md` with the pattern's
+  security caveats and 13 tests covering repaying, non-repaying, partially
+  repaying and re-entering borrowers (#216)
 
 ### Changed
 - `test-init --bench` is no longer an alias for `--budget`. It now emits

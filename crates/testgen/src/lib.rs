@@ -1266,7 +1266,7 @@ pub fn generate_workspace_with_layout(
             .unwrap_or(&member_dir)
             .to_string_lossy()
             .into_owned();
-        let outcome = match generate_with_layout(&member_dir, force, fuzz, layout) {
+        let outcome = match generate_with_layout(&member_dir, force, fuzz, layout, false, None) {
             Ok(pair) => Ok(pair),
             Err(e) => Err(e.to_string()),
         };
@@ -1342,6 +1342,20 @@ pub fn generate_with(
     options: &GenerateOptions,
 ) -> Result<(ContractInfo, Vec<&'static str>)> {
     generate_with_options_layout(dir, options, TestLayout::default())
+    let GenerateOptions {
+        force,
+        fuzz,
+        budget,
+        budget_entrypoint,
+    } = options;
+    generate_with_layout(
+        dir,
+        *force,
+        *fuzz,
+        TestLayout::default(),
+        *budget,
+        budget_entrypoint.as_deref(),
+    )
 }
 
 /// [`generate`] with an explicit test layout: either one file per concern under
@@ -1350,6 +1364,24 @@ pub fn generate_with_layout(
     dir: &Path,
     force: bool,
     fuzz: bool,
+    layout: TestLayout,
+    budget: bool,
+    budget_entrypoint: Option<&str>,
+) -> Result<(ContractInfo, Vec<&'static str>)> {
+    generate_with_options_layout(dir, &GenerateOptions::new(force, fuzz), layout)
+}
+
+pub fn generate_with_options_layout(
+    dir: &Path,
+    options: &GenerateOptions,
+    layout: TestLayout,
+) -> Result<(ContractInfo, Vec<&'static str>)> {
+    generate_with_options_layout(dir, &GenerateOptions::new(force, fuzz), layout)
+}
+
+pub fn generate_with_options_layout(
+    dir: &Path,
+    options: &GenerateOptions,
     layout: TestLayout,
 ) -> Result<(ContractInfo, Vec<&'static str>)> {
     generate_with_options_layout(dir, &GenerateOptions::new(force, fuzz), layout)
@@ -1435,6 +1467,8 @@ pub fn generate_with_options_layout(
 
     if options.budget {
         let budget_test = build_budget_test(&info, options.budget_entrypoint.as_deref())?;
+    if budget {
+        let budget_test = build_budget_test(&info, budget_entrypoint)?;
         if budget_test.is_empty() {
             return Err(ForgeError::InvalidArgument(format!(
                 "--budget needs an entrypoint to measure, but no methods were found in {}",
@@ -1723,6 +1757,7 @@ impl ForgePlugin for TestgenPlugin {
             budget_entrypoint: budget_arg.filter(|v| !v.is_empty()).cloned(),
         };
         let fuzz = options.fuzz;
+        let layout = TestLayout::parse(matches.get_one::<String>("layout").expect("has default"))?;
 
         // Workspace root: generate a harness per member.
         if is_workspace(&dir) {
@@ -1758,6 +1793,14 @@ impl ForgePlugin for TestgenPlugin {
         }
 
         let (info, written) = generate_with_layout(&dir, options.force, fuzz, layout)?;
+        let (info, written) = generate_with_layout(
+            &dir,
+            matches.get_flag("force"),
+            fuzz,
+            layout,
+            options.budget,
+            options.budget_entrypoint.as_deref(),
+        )?;
 
         // --bench: criterion benchmarks alongside the harness (#235).
         //
@@ -2597,7 +2640,7 @@ impl HelloContract {
         hello_world_project(&dir);
 
         let (_info, written) =
-            generate_with_layout(&dir, true, false, TestLayout::Inline).unwrap();
+            generate_with_layout(&dir, true, false, TestLayout::Inline, false, None).unwrap();
         assert_eq!(written, vec!["src/forge_tests.rs"]);
         assert!(!dir.join("tests/forge_smoke.rs").exists());
 
@@ -2631,8 +2674,8 @@ impl HelloContract {
         let dir = tmp.path().join("demo");
         hello_world_project(&dir);
 
-        generate_with_layout(&dir, true, false, TestLayout::Inline).unwrap();
-        generate_with_layout(&dir, true, false, TestLayout::Inline).unwrap();
+        generate_with_layout(&dir, true, false, TestLayout::Inline, false, None).unwrap();
+        generate_with_layout(&dir, true, false, TestLayout::Inline, false, None).unwrap();
 
         let lib = std::fs::read_to_string(dir.join("src/lib.rs")).unwrap();
         assert_eq!(lib.matches("mod forge_tests;").count(), 1, "{lib}");
@@ -2644,7 +2687,7 @@ impl HelloContract {
         let dir = tmp.path().join("vault");
         persistent_storage_project(&dir);
 
-        generate_with_layout(&dir, false, false, TestLayout::Inline).unwrap();
+        generate_with_layout(&dir, false, false, TestLayout::Inline, false, None).unwrap();
         let inline = std::fs::read_to_string(dir.join("src/forge_tests.rs")).unwrap();
         assert!(inline.contains("mod ttl {"));
         assert!(inline.contains("mod events {"));

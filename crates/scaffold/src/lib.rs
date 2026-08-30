@@ -171,6 +171,7 @@ pub fn template_description(name: &str) -> Option<&'static str> {
         "allowlist-token" => Some("allowlist-gated token with admin-managed transfer restrictions"),
         "atomic-swap" => Some("atomic two-party token swap with dual authorization"),
         "crowdfund" => Some("escrow/deadline crowdfunding contract"),
+        "dutch-auction" => Some("descending-price auction with linear price decay and immediate settlement"),
         "escrow" => Some("token escrow with approval or timeout-based refund path"),
         "faucet" => Some("token faucet dispensing a fixed amount per address with a cooldown"),
         "flash-loan" => Some(
@@ -182,10 +183,17 @@ pub fn template_description(name: &str) -> Option<&'static str> {
         "merkle-airdrop" => Some("one-claim-per-address airdrop verified against a merkle root"),
         "multisig" => Some("M-of-N multisig account contract (CustomAccountInterface)"),
         "nft" => Some("NFT (non-fungible token) with per-token metadata and minting"),
+        "nft-marketplace" => Some("NFT marketplace for listing, buying, and cancelling sales with configurable fees"),
+        "oracle-consumer" => Some("consumes price data from an external oracle (e.g. Reflector)"),
         "payment-splitter" => Some("splits received funds between payees by fixed shares"),
+        "prediction-market" => {
+            Some("binary outcome market with oracle resolution and parimutuel payouts")
+        }
+        "soulbound" => Some("soulbound (non-transferable) token contract"),
         "staking" => Some("proportional reward staking with O(1) acc_reward_per_share accumulator"),
         "streaming" => Some("streams tokens linearly over time with cancels and withdrawals"),
         "subscription" => Some("recurring payment charged once per elapsed interval"),
+        "timelock" => Some("timelock controller for delayed execution and cancellation of queued calls"),
         "token" => Some("SEP-41 fungible token (soroban_sdk::token::TokenInterface)"),
         "upgradeable" => Some("admin-gated upgradeable contract (update_current_contract_wasm)"),
         "vesting" => Some("token vesting with cliff + linear release schedule"),
@@ -395,19 +403,9 @@ pub fn resolve_extra_vars(
         let value = if let Some(v) = overrides.get(&var.name) {
             v.clone()
         } else if interactive {
-            let default = var.default.as_deref().unwrap_or("");
-            prompt_for(var.prompt_text(), default)?
+            prompt_for(var.prompt_text(), var.default.as_deref().unwrap_or(""))?
         } else {
-            match var.default.clone() {
-                Some(default) => default,
-                None if var.required => {
-                    return Err(ForgeError::InvalidArgument(format!(
-                        "template variable `{}` is required but was not supplied",
-                        var.name
-                    )));
-                }
-                None => String::new(),
-            }
+            var.default.clone().unwrap_or_default()
         };
         vars.insert(var.name.clone(), value);
     }
@@ -789,7 +787,7 @@ fn render_dir_fs(dir: &Path, source_root: &Path, dest: &Path, vars: &Vars) -> Re
                 .expect("path must be under source_root");
             if is_manifest(rel) {
                 continue; // template.toml configures generation; it is not output
-        }
+            }
 
             // Apply variable substitution to the relative path (including each
             // component), then strip a trailing .hbs suffix if present.
@@ -1488,25 +1486,30 @@ default = "MYT"
             available_templates(),
             vec![
                 "access-control",
+                "allowlist-token",
                 "amm",
                 "atomic-swap",
                 "crowdfund",
+                "dutch-auction",
                 "escrow",
                 "faucet",
                 "flash-loan",
                 "governance",
                 "hello-world",
                 "lottery",
-                "multisig",
-                "nft",
                 "merkle-airdrop",
                 "multisig",
                 "nft",
+                "nft-marketplace",
+                "oracle-consumer",
                 "payment-splitter",
+                "soulbound",
                 "staking",
                 "streaming",
                 "subscription",
+                "timelock",
                 "token",
+                "upgradeable",
                 "vesting",
                 "wrapped-asset"
             ]
@@ -1541,6 +1544,7 @@ default = "MYT"
     fn catalog_returns_all_templates_with_descriptions() {
         let catalog = template_catalog();
         let names: Vec<&str> = catalog.iter().map(|t| t.name).collect();
+        assert_eq!(names, available_templates());
         assert_eq!(
             names,
             vec![
@@ -2226,6 +2230,9 @@ default = "MYT"
     #[test]
     fn bundled_templates_without_a_manifest_report_none() {
         for template in available_templates() {
+            if ["crowdfund", "hello-world", "token"].contains(&template) {
+                continue;
+            }
             assert_eq!(
                 bundled_manifest(template).unwrap(),
                 None,

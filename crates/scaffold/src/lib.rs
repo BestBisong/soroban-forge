@@ -185,6 +185,8 @@ pub fn template_description(name: &str) -> Option<&'static str> {
         "merkle-airdrop" => Some("one-claim-per-address airdrop verified against a merkle root"),
         "multisig" => Some("M-of-N multisig account contract (CustomAccountInterface)"),
         "nft" => Some("NFT (non-fungible token) with per-token metadata and minting"),
+        "oracle-consumer" => Some("consumes price data from an external oracle (e.g. Reflector)"),
+        "payment-splitter" => Some("splits received funds between payees by fixed shares"),
         "pausable" => Some("admin-controlled circuit breaker gating guarded entrypoints"),
         "nft-marketplace" => Some("NFT marketplace for listing, buying, and cancelling sales with configurable fees"),
         "oracle-consumer" => Some("consumes price data from an external oracle (e.g. Reflector)"),
@@ -202,6 +204,7 @@ pub fn template_description(name: &str) -> Option<&'static str> {
         "upgradeable" => Some("admin-gated upgradeable contract (update_current_contract_wasm)"),
         "vesting" => Some("token vesting with cliff + linear release schedule"),
         "wrapped-asset" => Some("mints a wrapper token on deposit and burns it on withdraw 1:1"),
+        "yield-vault" => Some("ERC-4626-style yield vault with proportional shares and vault-favoured rounding"),
         _ => None,
     }
 }
@@ -1523,7 +1526,8 @@ default = "MYT"
                 "token",
                 "upgradeable",
                 "vesting",
-                "wrapped-asset"
+                "wrapped-asset",
+                "yield-vault"
             ]
         );
     }

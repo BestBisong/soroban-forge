@@ -95,6 +95,9 @@ pub fn load_manifest(name: &str) -> Result<TemplateManifest> {
 /// the `templates` subcommand and any future JSON output layer.
 pub fn template_description(name: &str) -> Option<&'static str> {
     match name {
+        "access-control" => Some(
+            "role-based access control — grant/revoke/has-role with an admin role that administers other roles",
+        ),
         "amm" => Some("constant-product AMM / liquidity pool (x*y=k, 0.3% fee)"),
         "allowlist-token" => Some("allowlist-gated token with admin-managed transfer restrictions"),
         "atomic-swap" => Some("atomic two-party token swap with dual authorization"),
@@ -1257,6 +1260,7 @@ default = "MYT"
         assert_eq!(
             available_templates(),
             vec![
+                "access-control",
                 "amm",
                 "atomic-swap",
                 "crowdfund",
@@ -1312,6 +1316,7 @@ default = "MYT"
         assert_eq!(
             names,
             vec![
+                "access-control",
                 "amm",
                 "atomic-swap",
                 "crowdfund",

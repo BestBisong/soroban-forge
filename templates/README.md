@@ -30,6 +30,8 @@ for the template format and how to add a new one.
 - `vesting` — token vesting with cliff + linear release schedule
 - `wrapped-asset` — 1:1 wrapper token minted on deposit, burned on withdraw
 - `english-auction` — ascending-bid auction with seller settlement
+- `access-control` — role-based access control: grant/revoke/has-role with an
+  admin role that administers other roles
 
 Manifests are shipped as `Cargo.toml.hbs` so cargo doesn't treat these
 directories as packages; the `.hbs` suffix is stripped when a project is

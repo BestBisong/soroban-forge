@@ -19,6 +19,7 @@ pub mod error;
 pub mod logging;
 pub mod plugin;
 pub mod render; // template renderer
+pub mod toolchain;
 
 pub use cli::run;
 pub use config::ForgeConfig;

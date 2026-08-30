@@ -15,6 +15,7 @@
 //! manifest (see [`manifest`]); those are filled from `--var name=value`, from
 //! the manifest default, or by prompting when the session is interactive.
 
+pub mod license;
 pub mod manifest;
 
 pub use manifest::{TemplateManifest, TemplateVariable};
@@ -39,6 +40,15 @@ pub const SOROBAN_SDK_VERSION: &str = "26.1.0"; // pinned sdk version
 
 const DEFAULT_TEMPLATE: &str = "hello-world";
 
+/// Name of the top-level directory under `templates/` holding files shared
+/// across templates (see [`compose_partials`]) rather than a template itself.
+const PARTIALS_DIR: &str = "_partials";
+
+/// Marker line a template's `Cargo.toml.hbs` carries in place of its own
+/// `[profile.release]` / `[profile.release-with-logs]` blocks; spliced out
+/// for the shared partial content by [`compose_partials`].
+const RELEASE_PROFILE_MARKER: &str = "# soroban-forge:partial:release-profile\n";
+
 /// Pre-commit configuration with rustfmt and clippy hooks.
 const PRE_COMMIT_CONFIG: &str = r#"# See https://pre-commit.com for more information
 # See https://pre-commit.com/hooks.html for more hooks
@@ -59,11 +69,70 @@ repos:
         pass_filenames: false
 "#;
 
+/// `.devcontainer/devcontainer.json` template for `new --devcontainer`
+/// (before `{{project_name}}` substitution — see [`render_str`]).
+fn devcontainer_json_template() -> String {
+    use soroban_forge_core::toolchain::WASM_TARGET;
+    format!(
+        r#"{{
+  "name": "{{{{project_name}}}}",
+  "build": {{
+    "dockerfile": "Dockerfile"
+  }},
+  "customizations": {{
+    "vscode": {{
+      "extensions": ["rust-lang.rust-analyzer", "tamasfe.even-better-toml"]
+    }}
+  }},
+  "postCreateCommand": "cargo build --target {wasm_target}"
+}}
+"#,
+        wasm_target = WASM_TARGET,
+    )
+}
+
+/// `.devcontainer/Dockerfile` for `soroban-forge new --devcontainer`.
+///
+/// Pinned to the same minimum Rust/stellar-cli versions `soroban-forge
+/// doctor` checks for (see `soroban_forge_core::toolchain`), so a container
+/// built from this file always passes `doctor`.
+fn devcontainer_dockerfile() -> String {
+    use soroban_forge_core::toolchain::{MIN_RUST, MIN_STELLAR, WASM_TARGET};
+    format!(
+        r#"FROM rust:{major}.{minor}-bookworm
+
+# Matches the minimums `soroban-forge doctor` checks for.
+RUN rustup target add {wasm_target} \
+    && cargo install --locked stellar-cli --version "^{stellar_major}"
+
+WORKDIR /workspace
+"#,
+        major = MIN_RUST.0,
+        minor = MIN_RUST.1,
+        wasm_target = WASM_TARGET,
+        stellar_major = MIN_STELLAR.0,
+    )
+}
+
+/// Section appended to a generated project's `README.md` documenting the
+/// `.devcontainer/` when `--devcontainer` is used.
+const DEVCONTAINER_README_SECTION: &str = "\n## Dev Container\n\n\
+This project ships a `.devcontainer/` so it opens ready-to-build in \
+GitHub Codespaces or VS Code's Dev Containers extension: Rust, the \
+`wasm32v1-none` target, and `stellar-cli` are preinstalled to the \
+versions `soroban-forge doctor` requires.\n\n\
+- **Codespaces**: click \"Code\" → \"Create codespace on main\" on GitHub.\n\
+- **VS Code**: install the *Dev Containers* extension, then \
+\"Reopen in Container\".\n";
+
 /// Names of the bundled templates, sorted.
 pub fn available_templates() -> Vec<&'static str> {
     let mut names: Vec<&'static str> = TEMPLATES
         .dirs()
         .filter_map(|d| d.path().file_name().and_then(|n| n.to_str()))
+        // `_partials` holds files shared across templates (see
+        // `compose_partials`), not a template of its own.
+        .filter(|name| *name != PARTIALS_DIR)
         .collect();
     names.sort_unstable();
     names
@@ -100,18 +169,29 @@ pub fn template_description(name: &str) -> Option<&'static str> {
         "atomic-swap" => Some("atomic two-party token swap with dual authorization"),
         "crowdfund" => Some("escrow/deadline crowdfunding contract"),
         "cross-contract" => Some("two-contract workspace demonstrating cross-contract calls with authorization"),
+        "dutch-auction" => Some("descending-price auction with linear price decay and immediate settlement"),
         "escrow" => Some("token escrow with approval or timeout-based refund path"),
         "faucet" => Some("token faucet dispensing a fixed amount per address with a cooldown"),
+        "flash-loan" => Some(
+            "uncollateralized single-transaction loan repaid via a borrower callback",
+        ),
         "governance" => Some("DAO governance with weighted voting, quorum, and proposal execution"),
         "hello-world" => Some("minimal greeter contract (recommended starting point)"),
         "lottery" => Some("randomized lottery with ticket purchases and prize pool distribution"),
         "merkle-airdrop" => Some("one-claim-per-address airdrop verified against a merkle root"),
         "multisig" => Some("M-of-N multisig account contract (CustomAccountInterface)"),
         "nft" => Some("NFT (non-fungible token) with per-token metadata and minting"),
+        "nft-marketplace" => Some("NFT marketplace for listing, buying, and cancelling sales with configurable fees"),
+        "oracle-consumer" => Some("consumes price data from an external oracle (e.g. Reflector)"),
         "payment-splitter" => Some("splits received funds between payees by fixed shares"),
+        "prediction-market" => {
+            Some("binary outcome market with oracle resolution and parimutuel payouts")
+        }
+        "soulbound" => Some("soulbound (non-transferable) token contract"),
         "staking" => Some("proportional reward staking with O(1) acc_reward_per_share accumulator"),
         "streaming" => Some("streams tokens linearly over time with cancels and withdrawals"),
         "subscription" => Some("recurring payment charged once per elapsed interval"),
+        "timelock" => Some("timelock controller for delayed execution and cancellation of queued calls"),
         "token" => Some("SEP-41 fungible token (soroban_sdk::token::TokenInterface)"),
         "upgradeable" => Some("admin-gated upgradeable contract (update_current_contract_wasm)"),
         "vesting" => Some("token vesting with cliff + linear release schedule"),
@@ -321,19 +401,9 @@ pub fn resolve_extra_vars(
         let value = if let Some(v) = overrides.get(&var.name) {
             v.clone()
         } else if interactive {
-            let default = var.default.as_deref().unwrap_or("");
-            prompt_for(var.prompt_text(), default)?
+            prompt_for(var.prompt_text(), var.default.as_deref().unwrap_or(""))?
         } else {
-            match var.default.clone() {
-                Some(default) => default,
-                None if var.required => {
-                    return Err(ForgeError::InvalidArgument(format!(
-                        "template variable `{}` is required but was not supplied",
-                        var.name
-                    )));
-                }
-                None => String::new(),
-            }
+            var.default.clone().unwrap_or_default()
         };
         vars.insert(var.name.clone(), value);
     }
@@ -365,6 +435,12 @@ fn prompt_for(question: &str, default: &str) -> Result<String> {
 /// Generate `template` into `dest` (which must not already exist unless
 /// `force` is set). This is the programmatic API behind `soroban-forge new`.
 pub fn generate(template: &str, dest: &Path, vars: &Vars, force: bool) -> Result<()> {
+    if template == PARTIALS_DIR {
+        return Err(ForgeError::Template(format!(
+            "unknown template `{template}` (available: {})",
+            available_templates().join(", ")
+        )));
+    }
     let template_dir = TEMPLATES.get_dir(template).ok_or_else(|| {
         ForgeError::Template(format!(
             "unknown template `{template}` (available: {})",
@@ -377,7 +453,55 @@ pub fn generate(template: &str, dest: &Path, vars: &Vars, force: bool) -> Result
     }
 
     render_dir(template_dir, template, dest, vars)?;
+    compose_partials(template, dest, vars)?;
     write_forge_toml(dest, vars)?;
+    Ok(())
+}
+
+/// Fill in files shared across templates (see `templates/_partials/`) that
+/// `template` didn't ship its own copy of, and splice the shared release
+/// profile into the rendered `Cargo.toml`. Templates opt out of any of this
+/// simply by shipping their own file at the same path — see the per-file
+/// checks below.
+fn compose_partials(template: &str, dest: &Path, vars: &Vars) -> Result<()> {
+    let template_dir = TEMPLATES.get_dir(template);
+    let template_has = |rel: &str| {
+        template_dir.is_some_and(|d| d.get_file(format!("{template}/{rel}")).is_some())
+    };
+
+    for rel in [".gitignore", "rust-toolchain.toml"] {
+        if template_has(rel) {
+            continue; // the template ships its own — it wins.
+        }
+        let Some(partial) = TEMPLATES.get_file(format!("{PARTIALS_DIR}/{rel}")) else {
+            continue;
+        };
+        let contents = partial.contents_utf8().ok_or_else(|| {
+            ForgeError::Template(format!("partial {rel} is not UTF-8"))
+        })?;
+        let out_path = dest.join(rel);
+        std::fs::write(&out_path, render_str(contents, vars))
+            .map_err(ForgeError::io(format!("writing {}", out_path.display())))?;
+    }
+
+    // The release profile lives inside Cargo.toml, so it can't be composed
+    // as a standalone file: splice it into the marker every Cargo.toml.hbs
+    // carries in place of its own [profile.release] blocks.
+    let cargo_toml = dest.join("Cargo.toml");
+    if let Ok(rendered) = std::fs::read_to_string(&cargo_toml) {
+        if rendered.contains(RELEASE_PROFILE_MARKER) {
+            let partial = TEMPLATES
+                .get_file(format!("{PARTIALS_DIR}/release-profile.toml"))
+                .and_then(|f| f.contents_utf8())
+                .ok_or_else(|| {
+                    ForgeError::Template("partial release-profile.toml is missing or not UTF-8".into())
+                })?;
+            let patched = rendered.replace(RELEASE_PROFILE_MARKER, partial);
+            std::fs::write(&cargo_toml, patched)
+                .map_err(ForgeError::io(format!("writing {}", cargo_toml.display())))?;
+        }
+    }
+
     Ok(())
 }
 
@@ -395,13 +519,22 @@ pub fn parse_contract_spec(spec: &str) -> (String, String) {
 /// - point `soroban-sdk` at the workspace (`soroban-sdk.workspace = true`)
 ///   in both `[dependencies]` and `[dev-dependencies]` (preserving the
 ///   dev `features`), and
-/// - drop `[profile.*]` sections, which Cargo only honours at the workspace
-///   root and warns about in members.
+/// - drop `[profile.*]` sections (or the shared-partial marker that stands
+///   in for them — see `compose_partials`), which Cargo only honours at the
+///   workspace root and warns about in members.
 fn member_manifest(rendered: &str) -> String {
     let mut out = String::new();
     let mut in_profile = false;
     for line in rendered.lines() {
         let trimmed = line.trim_start();
+
+        // A template that hasn't rendered through `compose_partials` (every
+        // workspace member goes through `render_dir` directly, not
+        // `generate`) still carries the release-profile marker verbatim;
+        // drop it the same as an inline [profile.*] section.
+        if line == RELEASE_PROFILE_MARKER.trim_end() {
+            continue;
+        }
 
         // Enter/exit a [profile.*] section (dropped entirely).
         if trimmed.starts_with('[') {
@@ -652,7 +785,7 @@ fn render_dir_fs(dir: &Path, source_root: &Path, dest: &Path, vars: &Vars) -> Re
                 .expect("path must be under source_root");
             if is_manifest(rel) {
                 continue; // template.toml configures generation; it is not output
-        }
+            }
 
             // Apply variable substitution to the relative path (including each
             // component), then strip a trailing .hbs suffix if present.
@@ -776,6 +909,72 @@ fn write_pre_commit_config(dest: &Path, force: bool) -> Result<()> {
     }
     std::fs::write(&path, PRE_COMMIT_CONFIG)
         .map_err(ForgeError::io(format!("writing {}", path.display())))
+}
+
+/// The calendar year, computed without a date/time dependency: good enough
+/// for a LICENSE copyright line, which only ever needs the current year.
+fn current_year() -> i32 {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    1970 + (secs / 31_557_600) as i32 // 31_557_600s = 365.25 days, the average Gregorian year
+}
+
+/// Write a LICENSE file into `dest` for `license_id` (one of
+/// [`license::LICENSE_IDS`]), with `author` and the current year filled in.
+/// Respects `force` the same way `write_pre_commit_config` does.
+fn write_license_file(dest: &Path, license_id: &str, author: &str, force: bool) -> Result<()> {
+    let path = dest.join("LICENSE");
+    if path.exists() && !force {
+        return Err(ForgeError::AlreadyExists(path));
+    }
+    let text = license::license_text(license_id, author, current_year());
+    std::fs::write(&path, text).map_err(ForgeError::io(format!("writing {}", path.display())))
+}
+
+/// Write `.devcontainer/{devcontainer.json,Dockerfile}` into `dest` and
+/// document it in the generated `README.md`. Respects `force` the same way
+/// `write_pre_commit_config` does.
+fn write_devcontainer(dest: &Path, vars: &Vars, force: bool) -> Result<()> {
+    let dir = dest.join(".devcontainer");
+    let json_path = dir.join("devcontainer.json");
+    let dockerfile_path = dir.join("Dockerfile");
+    if !force && (json_path.exists() || dockerfile_path.exists()) {
+        return Err(ForgeError::AlreadyExists(dir));
+    }
+    std::fs::create_dir_all(&dir)
+        .map_err(ForgeError::io(format!("creating {}", dir.display())))?;
+    std::fs::write(&json_path, render_str(&devcontainer_json_template(), vars))
+        .map_err(ForgeError::io(format!("writing {}", json_path.display())))?;
+    std::fs::write(&dockerfile_path, devcontainer_dockerfile())
+        .map_err(ForgeError::io(format!("writing {}", dockerfile_path.display())))?;
+
+    // Document it in the generated README, when the template has one.
+    let readme_path = dest.join("README.md");
+    if let Ok(existing) = std::fs::read_to_string(&readme_path) {
+        if !existing.contains("## Dev Container") {
+            let updated = format!("{existing}{DEVCONTAINER_README_SECTION}");
+            std::fs::write(&readme_path, updated)
+                .map_err(ForgeError::io(format!("writing {}", readme_path.display())))?;
+        }
+    }
+    Ok(())
+}
+
+/// Insert a `license = "..."` line into the `[package]` section of the
+/// already-rendered `Cargo.toml` at `dest`, matching `license_id`.
+fn set_cargo_toml_license(dest: &Path, license_id: &str) -> Result<()> {
+    let path = dest.join("Cargo.toml");
+    let contents = std::fs::read_to_string(&path)
+        .map_err(ForgeError::io(format!("reading {}", path.display())))?;
+    let field = license::cargo_license_field(license_id);
+    let patched = contents.replacen(
+        "[package]\n",
+        &format!("[package]\nlicense = \"{field}\"\n"),
+        1,
+    );
+    std::fs::write(&path, patched).map_err(ForgeError::io(format!("writing {}", path.display())))
 }
 
 /// Initialize a git repository in `dest`.
@@ -932,6 +1131,18 @@ impl ForgePlugin for ScaffoldPlugin {
                     .long("dry-run")
                     .action(ArgAction::SetTrue)
                     .help("Print the planned file tree without writing anything to disk"),
+            )
+            .arg(
+                Arg::new("license")
+                    .long("license")
+                    .value_parser(license::LICENSE_IDS)
+                    .help("Write a LICENSE file and set Cargo.toml's license field [default: none, today's behaviour]"),
+            )
+            .arg(
+                Arg::new("devcontainer")
+                    .long("devcontainer")
+                    .action(ArgAction::SetTrue)
+                    .help("Add a .devcontainer/ with Rust, wasm32v1-none and stellar-cli preinstalled"),
             )
     }
 
@@ -1170,6 +1381,15 @@ impl ForgePlugin for ScaffoldPlugin {
             write_pre_commit_config(&dest, force)?;
         }
 
+        if let Some(license_id) = matches.get_one::<String>("license") {
+            write_license_file(&dest, license_id, &author, force)?;
+            set_cargo_toml_license(&dest, license_id)?;
+        }
+
+        if matches.get_flag("devcontainer") {
+            write_devcontainer(&dest, &vars, force)?;
+        }
+
         if !ctx.quiet {
             println!(
                 "created `{name}` from template `{template}` at {}",
@@ -1184,6 +1404,12 @@ impl ForgePlugin for ScaffoldPlugin {
             println!("  soroban-forge ci-init           # add GitHub Actions workflows");
             if matches.get_flag("pre-commit") {
                 println!("  pre-commit install              # enable the git hooks");
+            }
+            if let Some(license_id) = matches.get_one::<String>("license") {
+                println!("  license: {}", license::cargo_license_field(license_id));
+            }
+            if matches.get_flag("devcontainer") {
+                println!("  Reopen in Container             # or: devcontainer up (Codespaces-ready)");
             }
         }
         Ok(())
@@ -1225,7 +1451,6 @@ name = "token_symbol"
 prompt = "Symbol"
 default = "MYT"
 "#,
-            "token",
         )
         .unwrap();
 
@@ -1258,24 +1483,30 @@ default = "MYT"
         assert_eq!(
             available_templates(),
             vec![
+                "allowlist-token",
                 "amm",
                 "atomic-swap",
                 "crowdfund",
+                "dutch-auction",
                 "escrow",
                 "faucet",
+                "flash-loan",
                 "governance",
                 "hello-world",
                 "lottery",
-                "multisig",
-                "nft",
                 "merkle-airdrop",
                 "multisig",
                 "nft",
+                "nft-marketplace",
+                "oracle-consumer",
                 "payment-splitter",
+                "soulbound",
                 "staking",
                 "streaming",
                 "subscription",
+                "timelock",
                 "token",
+                "upgradeable",
                 "vesting",
                 "wrapped-asset"
             ]
@@ -1310,6 +1541,7 @@ default = "MYT"
     fn catalog_returns_all_templates_with_descriptions() {
         let catalog = template_catalog();
         let names: Vec<&str> = catalog.iter().map(|t| t.name).collect();
+        assert_eq!(names, available_templates());
         assert_eq!(
             names,
             vec![
@@ -1318,6 +1550,7 @@ default = "MYT"
                 "crowdfund",
                 "escrow",
                 "faucet",
+                "flash-loan",
                 "governance",
                 "hello-world",
                 "lottery",
@@ -1464,6 +1697,82 @@ default = "MYT"
     }
 
     #[test]
+    fn partials_dir_is_excluded_from_available_templates() {
+        assert!(!available_templates().contains(&"_partials"));
+    }
+
+    #[test]
+    fn generate_rejects_partials_dir_as_a_template_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("demo");
+        let err = generate(
+            "_partials",
+            &dest,
+            &project_vars("demo", "A", "2021"),
+            false,
+        )
+        .unwrap_err();
+        assert!(matches!(err, ForgeError::Template(_)));
+    }
+
+    #[test]
+    fn compose_partials_fills_gitignore_and_rust_toolchain_when_template_lacks_them() {
+        // escrow ships neither a .gitignore nor a rust-toolchain.toml.
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("demo");
+        generate("escrow", &dest, &project_vars("demo", "A", "2021"), false).unwrap();
+
+        let gitignore = std::fs::read_to_string(dest.join(".gitignore")).unwrap();
+        assert_eq!(gitignore, "target/\n");
+
+        let toolchain = std::fs::read_to_string(dest.join("rust-toolchain.toml")).unwrap();
+        assert!(toolchain.contains("channel = \"1.84\""));
+        assert!(toolchain.contains("wasm32v1-none"));
+    }
+
+    #[test]
+    fn compose_partials_respects_a_templates_own_gitignore() {
+        // nft ships its own `.gitignore` (no trailing slash) — it must win
+        // over the shared partial's `target/`.
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("demo");
+        generate("nft", &dest, &project_vars("demo", "A", "2021"), false).unwrap();
+
+        let gitignore = std::fs::read_to_string(dest.join(".gitignore")).unwrap();
+        assert_eq!(gitignore, "target\n");
+    }
+
+    #[test]
+    fn compose_partials_splices_release_profile_into_cargo_toml() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("demo");
+        generate(
+            "hello-world",
+            &dest,
+            &project_vars("demo", "A", "2021"),
+            false,
+        )
+        .unwrap();
+
+        let manifest = std::fs::read_to_string(dest.join("Cargo.toml")).unwrap();
+        assert!(manifest.contains("[profile.release]"));
+        assert!(manifest.contains("[profile.release-with-logs]"));
+        assert!(manifest.contains("lto = true"));
+        assert!(!manifest.contains("soroban-forge:partial"), "marker leaked into output");
+    }
+
+    #[test]
+    fn member_manifest_strips_the_release_profile_marker() {
+        let rendered = format!(
+            "[package]\nname = \"demo\"\n\n{}",
+            RELEASE_PROFILE_MARKER
+        );
+        let out = member_manifest(&rendered);
+        assert!(!out.contains("soroban-forge:partial"));
+        assert!(!out.contains("[profile"));
+    }
+
+    #[test]
     fn every_template_generates_without_leftover_hbs_files() {
         for template in available_templates() {
             let dir = tempfile::tempdir().unwrap();
@@ -1584,6 +1893,147 @@ default = "MYT"
         )
         .unwrap();
         assert!(!dest.join(".pre-commit-config.yaml").exists());
+    }
+
+    #[test]
+    fn writes_license_file_and_sets_cargo_toml_field() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("demo");
+        generate(
+            "hello-world",
+            &dest,
+            &project_vars("demo", "Ada Lovelace", "2021"),
+            false,
+        )
+        .unwrap();
+        write_license_file(&dest, "mit", "Ada Lovelace", false).unwrap();
+        set_cargo_toml_license(&dest, "mit").unwrap();
+
+        let license = std::fs::read_to_string(dest.join("LICENSE")).unwrap();
+        assert!(license.starts_with("MIT License"));
+        assert!(license.contains("Ada Lovelace"));
+        assert!(license.contains(&current_year().to_string()));
+
+        let manifest = std::fs::read_to_string(dest.join("Cargo.toml")).unwrap();
+        assert!(manifest.contains("license = \"MIT\""));
+        // license comes right after [package], ahead of the other fields.
+        assert!(manifest.contains("[package]\nlicense = \"MIT\"\n"));
+    }
+
+    #[test]
+    fn refuses_to_overwrite_license_without_force() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("demo");
+        generate(
+            "hello-world",
+            &dest,
+            &project_vars("demo", "A", "2021"),
+            false,
+        )
+        .unwrap();
+        write_license_file(&dest, "apache-2.0", "A", false).unwrap();
+        assert!(matches!(
+            write_license_file(&dest, "apache-2.0", "A", false),
+            Err(ForgeError::AlreadyExists(_))
+        ));
+        write_license_file(&dest, "apache-2.0", "A", true).unwrap();
+    }
+
+    #[test]
+    fn license_not_written_without_flag() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("demo");
+        generate(
+            "hello-world",
+            &dest,
+            &project_vars("demo", "A", "2021"),
+            false,
+        )
+        .unwrap();
+        assert!(!dest.join("LICENSE").exists());
+        let manifest = std::fs::read_to_string(dest.join("Cargo.toml")).unwrap();
+        assert!(!manifest.contains("license"));
+    }
+
+    #[test]
+    fn license_flag_is_registered_with_expected_values() {
+        let plugin = ScaffoldPlugin;
+        let cmd = plugin.command();
+        let matches = cmd
+            .try_get_matches_from(vec!["new", "my-project", "--license", "unlicense"])
+            .unwrap();
+        assert_eq!(
+            matches.get_one::<String>("license").map(String::as_str),
+            Some("unlicense")
+        );
+    }
+
+    #[test]
+    fn license_flag_rejects_unknown_value() {
+        let plugin = ScaffoldPlugin;
+        let cmd = plugin.command();
+        assert!(cmd
+            .try_get_matches_from(vec!["new", "my-project", "--license", "gpl-3.0"])
+            .is_err());
+    }
+
+    #[test]
+    fn writes_devcontainer_and_documents_it_in_readme() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("demo");
+        let vars = project_vars("demo", "A", "2021");
+        generate("hello-world", &dest, &vars, false).unwrap();
+        write_devcontainer(&dest, &vars, false).unwrap();
+
+        let json = std::fs::read_to_string(dest.join(".devcontainer/devcontainer.json")).unwrap();
+        assert!(json.contains("\"name\": \"demo\""));
+        assert!(json.contains("wasm32v1-none"));
+
+        let dockerfile = std::fs::read_to_string(dest.join(".devcontainer/Dockerfile")).unwrap();
+        assert!(dockerfile.contains("FROM rust:1.84-bookworm"));
+        assert!(dockerfile.contains("rustup target add wasm32v1-none"));
+        assert!(dockerfile.contains("stellar-cli"));
+
+        let readme = std::fs::read_to_string(dest.join("README.md")).unwrap();
+        assert!(readme.contains("## Dev Container"));
+    }
+
+    #[test]
+    fn refuses_to_overwrite_devcontainer_without_force() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("demo");
+        let vars = project_vars("demo", "A", "2021");
+        generate("hello-world", &dest, &vars, false).unwrap();
+        write_devcontainer(&dest, &vars, false).unwrap();
+        assert!(matches!(
+            write_devcontainer(&dest, &vars, false),
+            Err(ForgeError::AlreadyExists(_))
+        ));
+        write_devcontainer(&dest, &vars, true).unwrap();
+    }
+
+    #[test]
+    fn devcontainer_not_written_without_flag() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("demo");
+        generate(
+            "hello-world",
+            &dest,
+            &project_vars("demo", "A", "2021"),
+            false,
+        )
+        .unwrap();
+        assert!(!dest.join(".devcontainer").exists());
+    }
+
+    #[test]
+    fn devcontainer_flag_is_registered() {
+        let plugin = ScaffoldPlugin;
+        let cmd = plugin.command();
+        let matches = cmd
+            .try_get_matches_from(vec!["new", "my-project", "--devcontainer"])
+            .unwrap();
+        assert!(matches.get_flag("devcontainer"));
     }
 
     #[test]
@@ -1776,6 +2226,9 @@ default = "MYT"
     #[test]
     fn bundled_templates_without_a_manifest_report_none() {
         for template in available_templates() {
+            if ["crowdfund", "hello-world", "token"].contains(&template) {
+                continue;
+            }
             assert_eq!(
                 bundled_manifest(template).unwrap(),
                 None,

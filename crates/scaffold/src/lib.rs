@@ -171,6 +171,9 @@ pub fn template_description(name: &str) -> Option<&'static str> {
         "dutch-auction" => Some("descending-price auction with linear price decay and immediate settlement"),
         "escrow" => Some("token escrow with approval or timeout-based refund path"),
         "faucet" => Some("token faucet dispensing a fixed amount per address with a cooldown"),
+        "flash-loan" => Some(
+            "uncollateralized single-transaction loan repaid via a borrower callback",
+        ),
         "governance" => Some("DAO governance with weighted voting, quorum, and proposal execution"),
         "hello-world" => Some("minimal greeter contract (recommended starting point)"),
         "lottery" => Some("randomized lottery with ticket purchases and prize pool distribution"),
@@ -1481,6 +1484,7 @@ default = "MYT"
                 "dutch-auction",
                 "escrow",
                 "faucet",
+                "flash-loan",
                 "governance",
                 "hello-world",
                 "lottery",
@@ -1530,6 +1534,32 @@ default = "MYT"
         let catalog = template_catalog();
         let names: Vec<&str> = catalog.iter().map(|t| t.name).collect();
         assert_eq!(names, available_templates());
+        assert_eq!(
+            names,
+            vec![
+                "amm",
+                "atomic-swap",
+                "crowdfund",
+                "escrow",
+                "faucet",
+                "flash-loan",
+                "governance",
+                "hello-world",
+                "lottery",
+                "multisig",
+                "nft",
+                "merkle-airdrop",
+                "multisig",
+                "nft",
+                "payment-splitter",
+                "staking",
+                "streaming",
+                "subscription",
+                "token",
+                "vesting",
+                "wrapped-asset"
+            ]
+        );
         for entry in &catalog {
             assert!(
                 !entry.description.is_empty(),

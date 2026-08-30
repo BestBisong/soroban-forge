@@ -1,0 +1,9 @@
+description = "uncollateralized single-transaction loan repaid via a borrower callback"
+
+[post_generate]
+hints = [
+  "deploy args: --admin <ADDRESS> --token <TOKEN_ADDRESS> --fee_bps <BASIS_POINTS>",
+  "fee_bps is in basis points (30 = 0.30%) and is capped at 1000 (10%)",
+  "a borrower is a separate contract exposing exec(pool, token, amount, fee) — see the README",
+  "read the README's security caveats before adapting this: flash loans are an attack primitive too",
+]

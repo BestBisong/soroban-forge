@@ -110,6 +110,7 @@ pub fn template_description(name: &str) -> Option<&'static str> {
         "nft" => Some("NFT (non-fungible token) with per-token metadata and minting"),
         "payment-splitter" => Some("splits received funds between payees by fixed shares"),
         "staking" => Some("proportional reward staking with O(1) acc_reward_per_share accumulator"),
+        "storage-migration" => Some("storage layout migration from v1 to v2 with version-marker pattern"),
         "streaming" => Some("streams tokens linearly over time with cancels and withdrawals"),
         "subscription" => Some("recurring payment charged once per elapsed interval"),
         "token" => Some("SEP-41 fungible token (soroban_sdk::token::TokenInterface)"),

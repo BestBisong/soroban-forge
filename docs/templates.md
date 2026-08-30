@@ -14,6 +14,7 @@ List them at any time with `soroban-forge templates`:
 - `nft` – NFT with per-token metadata and minting
 - `nft-marketplace` – NFT marketplace for listing, buying, and cancelling sales with configurable fees
 - `token` – SEP-41 fungible token (`soroban_sdk::token::TokenInterface`)
+- `timelock` – timelock controller for delayed execution and cancellation of queued calls
 - `vesting` – token vesting with cliff + linear release schedule
 
 ## Variables
@@ -83,6 +84,7 @@ description; `soroban-forge new <name> --template <t>` scaffolds one.
 | `flash-loan`       | uncollateralized loan repaid inside one transaction              |
 | `governance`       | DAO governance with weighted voting, quorum and execution        |
 | `multisig`         | M-of-N multisig account contract (`CustomAccountInterface`)      |
+| `timelock`         | timelock controller for delayed execution and cancellation       |
 
 Every template ships a `README.md` with build/deploy instructions and unit
 tests that pass out of the box:
@@ -135,6 +137,12 @@ from `start_price` to `floor_price` over the duration. The first buyer to call
 `buy` purchases the asset at the current price, which immediately transfers the
 asset to the buyer and the payment to the seller.
 
+## Timelock controller
+
+Enforces a minimum time delay between queueing an operation (contract call, function,
+arguments, and salt) and executing it. Proposers queue calls with `delay >= min_delay`,
+and executors trigger the call once the delay has elapsed. Proposers or admins can
+cancel queued operations before execution.
 ## NFT marketplace
 
 Sellers list NFTs from any contract conforming to the `nft` template's interface,

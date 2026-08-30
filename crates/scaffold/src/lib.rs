@@ -95,10 +95,11 @@ pub fn load_manifest(name: &str) -> Result<TemplateManifest> {
 /// the `templates` subcommand and any future JSON output layer.
 pub fn template_description(name: &str) -> Option<&'static str> {
     match name {
-        "amm" => Some("constant-product AMM / liquidity pool (x*y=k, 0.3% fee)"),
         "allowlist-token" => Some("allowlist-gated token with admin-managed transfer restrictions"),
+        "amm" => Some("constant-product AMM / liquidity pool (x*y=k, 0.3% fee)"),
         "atomic-swap" => Some("atomic two-party token swap with dual authorization"),
         "crowdfund" => Some("escrow/deadline crowdfunding contract"),
+        "cross-contract" => Some("two-contract workspace demonstrating cross-contract calls with authorization"),
         "escrow" => Some("token escrow with approval or timeout-based refund path"),
         "faucet" => Some("token faucet dispensing a fixed amount per address with a cooldown"),
         "governance" => Some("DAO governance with weighted voting, quorum, and proposal execution"),

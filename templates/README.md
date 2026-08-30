@@ -34,6 +34,8 @@ for the template format and how to add a new one.
 - `wrapped-asset` — 1:1 wrapper token minted on deposit, burned on withdraw
 - `english-auction` — ascending-bid auction with seller settlement
 - `pausable` — admin-controlled circuit breaker gating guarded entrypoints
+- `access-control` — role-based access control: grant/revoke/has-role with an
+  admin role that administers other roles
 - `flash-loan` — uncollateralized single-transaction loan repaid via a borrower callback
 
 Manifests are shipped as `Cargo.toml.hbs` so cargo doesn't treat these

@@ -183,6 +183,9 @@ pub fn template_description(name: &str) -> Option<&'static str> {
         "nft-marketplace" => Some("NFT marketplace for listing, buying, and cancelling sales with configurable fees"),
         "oracle-consumer" => Some("consumes price data from an external oracle (e.g. Reflector)"),
         "payment-splitter" => Some("splits received funds between payees by fixed shares"),
+        "prediction-market" => {
+            Some("binary outcome market with oracle resolution and parimutuel payouts")
+        }
         "soulbound" => Some("soulbound (non-transferable) token contract"),
         "staking" => Some("proportional reward staking with O(1) acc_reward_per_share accumulator"),
         "streaming" => Some("streams tokens linearly over time with cancels and withdrawals"),

@@ -107,6 +107,7 @@ pub fn template_description(name: &str) -> Option<&'static str> {
         "merkle-airdrop" => Some("one-claim-per-address airdrop verified against a merkle root"),
         "multisig" => Some("M-of-N multisig account contract (CustomAccountInterface)"),
         "nft" => Some("NFT (non-fungible token) with per-token metadata and minting"),
+        "pausable" => Some("admin-controlled circuit breaker gating guarded entrypoints"),
         "payment-splitter" => Some("splits received funds between payees by fixed shares"),
         "staking" => Some("proportional reward staking with O(1) acc_reward_per_share accumulator"),
         "streaming" => Some("streams tokens linearly over time with cancels and withdrawals"),

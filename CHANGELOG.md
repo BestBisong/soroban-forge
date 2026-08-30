@@ -7,6 +7,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Added
+- New `pausable` template — a minimal circuit breaker: an admin fixed at
+  deploy time can `pause`/`unpause`, and guarded entrypoints reject calls with
+  `Error::Paused` while paused
 - `soroban-forge new --var NAME=VALUE` (repeatable) plus support for a
   per-template `template.toml` manifest declaring custom variables. Missing
   values are prompted for when the session is interactive; non-interactive runs

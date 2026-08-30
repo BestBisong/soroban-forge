@@ -108,6 +108,9 @@ pub fn template_description(name: &str) -> Option<&'static str> {
         "multisig" => Some("M-of-N multisig account contract (CustomAccountInterface)"),
         "nft" => Some("NFT (non-fungible token) with per-token metadata and minting"),
         "payment-splitter" => Some("splits received funds between payees by fixed shares"),
+        "prediction-market" => {
+            Some("binary outcome market with oracle resolution and parimutuel payouts")
+        }
         "staking" => Some("proportional reward staking with O(1) acc_reward_per_share accumulator"),
         "streaming" => Some("streams tokens linearly over time with cancels and withdrawals"),
         "subscription" => Some("recurring payment charged once per elapsed interval"),

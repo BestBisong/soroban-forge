@@ -121,6 +121,13 @@ pub fn build_command(plugins: &[Box<dyn ForgePlugin>]) -> Command {
                 .global(true)
                 .value_name("SECS")
                 .help("Override the timeout for network-capable operations"),
+        )
+        .arg(
+            Arg::new("config")
+                .long("config")
+                .global(true)
+                .value_name("PATH")
+                .help("Load defaults from PATH instead of discovering forge.toml"),
         );
     for plugin in plugins {
         cmd = cmd.subcommand(plugin.command());
@@ -178,6 +185,7 @@ pub fn dispatch(plugins: &[Box<dyn ForgePlugin>], matches: &ArgMatches) -> Resul
             matches
                 .get_one::<String>("timeout")
                 .and_then(|value| value.parse::<u64>().ok()),
+            matches.get_one::<String>("config").map(std::path::PathBuf::from),
         )?;
         ctx.progress(&format!("running {name}"));
         log::debug!("dispatching to plugin `{}`", plugin.name());

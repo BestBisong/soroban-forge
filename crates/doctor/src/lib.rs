@@ -23,14 +23,9 @@ use std::path::Path;
 
 use clap::{Arg, ArgAction, ArgMatches, Command};
 use serde::{Deserialize, Serialize};
+use soroban_forge_core::toolchain::{MIN_RUST, MIN_STELLAR};
 use soroban_forge_core::{ForgeContext, ForgeError, ForgePlugin, Result};
 use soroban_forge_scaffold::SOROBAN_SDK_VERSION;
-
-/// Minimum Rust version able to target `wasm32v1-none`.
-pub const MIN_RUST: (u32, u32) = (1, 84); // minimum major.minor
-
-/// Minimum `stellar` CLI version required.
-pub const MIN_STELLAR: (u32, u32) = (21, 0);
 
 /// Default Soroban RPC endpoint used for the connectivity check.
 pub const TESTNET_RPC_URL: &str = "https://soroban-testnet.stellar.org";

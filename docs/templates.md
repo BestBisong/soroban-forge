@@ -6,6 +6,7 @@ List them at any time with `soroban-forge templates`:
 - `atomic-swap` – atomic two-party token swap with dual authorization
 - `crowdfund` – escrow/deadline crowdfunding contract
 - `escrow` – token escrow with approval or timeout-based refund path
+- `flash-loan` – uncollateralized single-transaction loan repaid via a borrower callback
 - `governance` – DAO governance with weighted voting, quorum, and proposal execution
 - `hello-world` – minimal greeter contract (recommended starting point)
 - `multisig` – M-of-N multisig account contract (`CustomAccountInterface`)
@@ -75,6 +76,7 @@ description; `soroban-forge new <name> --template <t>` scaffolds one.
 | `merkle-airdrop`   | one-claim-per-address airdrop verified against a merkle root      |
 | `amm`              | constant-product AMM / liquidity pool (`x*y=k`, 0.3% fee)         |
 | `atomic-swap`      | atomic two-party token swap with dual authorization              |
+| `flash-loan`       | uncollateralized loan repaid inside one transaction              |
 | `governance`       | DAO governance with weighted voting, quorum and execution        |
 | `multisig`         | M-of-N multisig account contract (`CustomAccountInterface`)      |
 
@@ -120,6 +122,25 @@ reproduce are:
 
 The `leaf` entrypoint is public so a script can check its own hashing against
 the contract's before publishing a root.
+
+## Flash loan
+
+`flash_loan` snapshots the pool's balance, transfers the principal to the
+borrower, calls back into `receiver.exec(pool, token, amount, fee)`, and then
+requires the balance to have grown by at least `fee`. That final check is the
+only thing enforcing repayment — a shortfall panics, and the panic unwinds the
+transfer that funded the loan along with everything the borrower did with it.
+The pool ends the call up exactly one fee, or the call never happened.
+
+Two properties are worth knowing before building on it. Soroban's host rejects
+calling a contract already on the call stack, so the pool cannot be re-entered
+from the callback and needs no guard of its own. And a borrower must
+authenticate its caller: `exec` is a public entrypoint, so `pool.require_auth()`
+— satisfied by the pool being the direct caller — is what separates a real loan
+from anyone invoking the callback with numbers they made up.
+
+The generated README carries the full security caveats, including why nothing
+should ever price off a spot balance or key privileges off a live one.
 
 ## Adding a template
 

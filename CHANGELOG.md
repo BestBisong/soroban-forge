@@ -33,6 +33,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   entrypoints taking `Option`, `Vec` or `Map` arguments, passing empty,
   single- and multi-element values through each — container arguments are
   frequently mis-encoded, the empty case most of all (#236)
+- `flash-loan` template — an uncollateralized loan lent and repaid inside one
+  transaction. The pool calls back into the borrower and then checks its own
+  balance, so a borrower that does not repay principal + fee has the funding
+  transfer unwound with the panic. Ships a `README.md` with the pattern's
+  security caveats and 13 tests covering repaying, non-repaying, partially
+  repaying and re-entering borrowers (#216)
 
 ### Changed
 - `test-init --bench` is no longer an alias for `--budget`. It now emits

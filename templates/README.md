@@ -6,6 +6,7 @@ for the template format and how to add a new one.
 
 - `hello-world` — minimal greeter contract
 - `nft` — non-fungible token with metadata, minting and burning
+- `nft-marketplace` — NFT marketplace for listing, buying, and cancelling sales with configurable treasury fees
 - `token` — SEP-41 fungible token (`soroban_sdk::token::TokenInterface`)
 - `crowdfund` — escrow/deadline crowdfunding example
 - `upgradeable` — admin-gated upgradeable contract (`update_current_contract_wasm`)
@@ -28,9 +29,14 @@ for the template format and how to add a new one.
 - `staking` — proportional reward staking with O(1) `acc_reward_per_share` accumulator
 - `streaming` — streams tokens linearly over time with cancel support
 - `subscription` — recurring payment charged once per elapsed interval
+- `timelock` — timelock controller for delayed execution and cancellation of queued calls
 - `vesting` — token vesting with cliff + linear release schedule
 - `wrapped-asset` — 1:1 wrapper token minted on deposit, burned on withdraw
+- `yield-vault` — ERC4626-style yield vault with proportional shares and vault-favoured rounding
 - `english-auction` — ascending-bid auction with seller settlement
+- `pausable` — admin-controlled circuit breaker gating guarded entrypoints
+- `access-control` — role-based access control: grant/revoke/has-role with an
+  admin role that administers other roles
 - `flash-loan` — uncollateralized single-transaction loan repaid via a borrower callback
 
 Manifests are shipped as `Cargo.toml.hbs` so cargo doesn't treat these

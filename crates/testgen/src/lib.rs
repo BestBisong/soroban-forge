@@ -1376,6 +1376,22 @@ pub fn generate_with_options_layout(
     options: &GenerateOptions,
     layout: TestLayout,
 ) -> Result<(ContractInfo, Vec<&'static str>)> {
+    generate_with_options_layout(dir, &GenerateOptions::new(force, fuzz), layout)
+}
+
+pub fn generate_with_options_layout(
+    dir: &Path,
+    options: &GenerateOptions,
+    layout: TestLayout,
+) -> Result<(ContractInfo, Vec<&'static str>)> {
+    generate_with_options_layout(dir, &GenerateOptions::new(force, fuzz), layout)
+}
+
+pub fn generate_with_options_layout(
+    dir: &Path,
+    options: &GenerateOptions,
+    layout: TestLayout,
+) -> Result<(ContractInfo, Vec<&'static str>)> {
     let info = detect::inspect(dir)?;
 
     let smoke = build_smoke_test(&info);

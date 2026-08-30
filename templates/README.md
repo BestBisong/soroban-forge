@@ -6,6 +6,7 @@ for the template format and how to add a new one.
 
 - `hello-world` — minimal greeter contract
 - `nft` — non-fungible token with metadata, minting and burning
+- `nft-marketplace` — NFT marketplace for listing, buying, and cancelling sales with configurable treasury fees
 - `token` — SEP-41 fungible token (`soroban_sdk::token::TokenInterface`)
 - `crowdfund` — escrow/deadline crowdfunding example
 - `upgradeable` — admin-gated upgradeable contract (`update_current_contract_wasm`)
@@ -32,6 +33,7 @@ for the template format and how to add a new one.
 - `vesting` — token vesting with cliff + linear release schedule
 - `wrapped-asset` — 1:1 wrapper token minted on deposit, burned on withdraw
 - `english-auction` — ascending-bid auction with seller settlement
+- `flash-loan` — uncollateralized single-transaction loan repaid via a borrower callback
 
 Manifests are shipped as `Cargo.toml.hbs` so cargo doesn't treat these
 directories as packages; the `.hbs` suffix is stripped when a project is

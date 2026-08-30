@@ -22,7 +22,7 @@
 //! required = true
 //! ```
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use soroban_forge_core::render::Vars;
 use soroban_forge_core::{ForgeError, Result};
 
@@ -41,7 +41,7 @@ pub const RESERVED_VARS: &[&str] = &[
 ];
 
 /// One custom variable declared by a template.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TemplateVariable {
     /// Placeholder name, used as `{{name}}` inside the template.
     pub name: String,

@@ -121,11 +121,14 @@ pub fn template_description(name: &str) -> Option<&'static str> {
     }
 }
 
-/// Metadata for a single bundled template.
+/// Metadata for a single bundled template, including declared variables.
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct TemplateInfo {
     pub name: &'static str,
     pub description: String,
+    /// Custom variables declared in the template's template.toml
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub variables: Vec<manifest::TemplateVariable>,
 }
 
 /// Return metadata for every bundled template, sorted by name.
@@ -135,11 +138,19 @@ pub struct TemplateInfo {
 pub fn template_catalog() -> Vec<TemplateInfo> {
     available_templates()
         .into_iter()
-        .map(|name| TemplateInfo {
-            name,
-            description: template_description(name)
-                .unwrap_or("no description available")
-                .to_string(),
+        .map(|name| {
+            let variables = bundled_manifest(name)
+                .ok()
+                .flatten()
+                .map(|m| m.variables)
+                .unwrap_or_default();
+            TemplateInfo {
+                name,
+                description: template_description(name)
+                    .unwrap_or("no description available")
+                    .to_string(),
+                variables,
+            }
         })
         .collect()
 }
@@ -939,11 +950,8 @@ impl ForgePlugin for ScaffoldPlugin {
     fn run(&self, matches: &ArgMatches, ctx: &ForgeContext) -> Result<()> {
         if matches.get_flag("list") {
             if ctx.json {
-                let templates = available_templates();
-                let list = serde_json::json!({
-                    "templates": templates
-                });
-                println!("{}", serde_json::to_string_pretty(&list).unwrap());
+                let catalog = template_catalog();
+                println!("{}", serde_json::to_string_pretty(&catalog).unwrap());
             } else if !ctx.quiet {
                 print!("{}", format_template_list(&available_templates()));
             }

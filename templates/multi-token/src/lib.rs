@@ -1,0 +1,179 @@
+//! A multi-token contract (ERC1155-style) managing many token ids with
+//! per-id, per-owner balances in a single contract instance.
+
+#![no_std]
+
+use soroban_sdk::{
+    contract, contracterror, contractimpl, contracttype, panic_with_error, symbol_short, Address,
+    Env, String, Vec,
+};
+
+pub const DAY_IN_LEDGERS: u32 = 17280;
+pub const BALANCE_TTL: u32 = 30 * DAY_IN_LEDGERS;
+pub const BALANCE_TTL_THRESHOLD: u32 = BALANCE_TTL - DAY_IN_LEDGERS;
+
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[repr(u32)]
+pub enum Error {
+    NegativeAmount = 1,
+    InsufficientBalance = 2,
+    MismatchedLengths = 3,
+}
+
+#[contracttype]
+#[derive(Clone)]
+pub struct BalanceKey {
+    pub owner: Address,
+    pub id: u32,
+}
+
+#[contracttype]
+#[derive(Clone)]
+pub enum DataKey {
+    Admin,
+    Name,
+    Symbol,
+    Balance(BalanceKey),
+}
+
+fn check_nonnegative(env: &Env, amount: i128) {
+    if amount < 0 {
+        panic_with_error!(env, Error::NegativeAmount);
+    }
+}
+
+fn read_balance(env: &Env, owner: &Address, id: u32) -> i128 {
+    let key = DataKey::Balance(BalanceKey { owner: owner.clone(), id });
+    if let Some(balance) = env.storage().persistent().get::<_, i128>(&key) {
+        env.storage().persistent().extend_ttl(&key, BALANCE_TTL_THRESHOLD, BALANCE_TTL);
+        balance
+    } else {
+        0
+    }
+}
+
+fn write_balance(env: &Env, owner: &Address, id: u32, amount: i128) {
+    let key = DataKey::Balance(BalanceKey { owner: owner.clone(), id });
+    env.storage().persistent().set(&key, &amount);
+    env.storage().persistent().extend_ttl(&key, BALANCE_TTL_THRESHOLD, BALANCE_TTL);
+}
+
+fn spend_balance(env: &Env, owner: &Address, id: u32, amount: i128) {
+    let balance = read_balance(env, owner, id);
+    if balance < amount {
+        panic_with_error!(env, Error::InsufficientBalance);
+    }
+    write_balance(env, owner, id, balance - amount);
+}
+
+fn receive_balance(env: &Env, owner: &Address, id: u32, amount: i128) {
+    write_balance(env, owner, id, read_balance(env, owner, id) + amount);
+}
+
+fn require_same_length(env: &Env, len_a: u32, len_b: u32) {
+    if len_a != len_b {
+        panic_with_error!(env, Error::MismatchedLengths);
+    }
+}
+
+#[contract]
+pub struct MultiTokenContract;
+
+#[contractimpl]
+impl MultiTokenContract {
+    pub fn __constructor(env: Env, admin: Address, name: String, symbol: String) {
+        env.storage().instance().set(&DataKey::Admin, &admin);
+        env.storage().instance().set(&DataKey::Name, &name);
+        env.storage().instance().set(&DataKey::Symbol, &symbol);
+    }
+
+    pub fn admin(env: Env) -> Address {
+        env.storage().instance().get(&DataKey::Admin).unwrap()
+    }
+
+    pub fn name(env: Env) -> String {
+        env.storage().instance().get(&DataKey::Name).unwrap()
+    }
+
+    pub fn symbol(env: Env) -> String {
+        env.storage().instance().get(&DataKey::Symbol).unwrap()
+    }
+
+    pub fn balance_of(env: Env, owner: Address, id: u32) -> i128 {
+        read_balance(&env, &owner, id)
+    }
+
+    pub fn balance_of_batch(env: Env, owners: Vec<Address>, ids: Vec<u32>) -> Vec<i128> {
+        require_same_length(&env, owners.len(), ids.len());
+        let mut balances = Vec::new(&env);
+        for i in 0..owners.len() {
+            balances.push_back(read_balance(&env, &owners.get(i).unwrap(), ids.get(i).unwrap()));
+        }
+        balances
+    }
+
+    pub fn mint(env: Env, to: Address, id: u32, amount: i128) {
+        check_nonnegative(&env, amount);
+        let admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        admin.require_auth();
+        receive_balance(&env, &to, id, amount);
+        env.events().publish((symbol_short!("mint"), admin, to, id), amount);
+    }
+
+    pub fn mint_batch(env: Env, to: Address, ids: Vec<u32>, amounts: Vec<i128>) {
+        require_same_length(&env, ids.len(), amounts.len());
+        let admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        admin.require_auth();
+        for i in 0..ids.len() {
+            let id = ids.get(i).unwrap();
+            let amount = amounts.get(i).unwrap();
+            check_nonnegative(&env, amount);
+            receive_balance(&env, &to, id, amount);
+        }
+        env.events().publish((symbol_short!("mintbatch"), admin, to), (ids, amounts));
+    }
+
+    pub fn transfer(env: Env, from: Address, to: Address, id: u32, amount: i128) {
+        from.require_auth();
+        check_nonnegative(&env, amount);
+        spend_balance(&env, &from, id, amount);
+        receive_balance(&env, &to, id, amount);
+        env.events().publish((symbol_short!("transfer"), from, to, id), amount);
+    }
+
+    pub fn transfer_batch(env: Env, from: Address, to: Address, ids: Vec<u32>, amounts: Vec<i128>) {
+        from.require_auth();
+        require_same_length(&env, ids.len(), amounts.len());
+        for i in 0..ids.len() {
+            let id = ids.get(i).unwrap();
+            let amount = amounts.get(i).unwrap();
+            check_nonnegative(&env, amount);
+            spend_balance(&env, &from, id, amount);
+            receive_balance(&env, &to, id, amount);
+        }
+        env.events().publish((symbol_short!("xferbatch"), from, to), (ids, amounts));
+    }
+
+    pub fn burn(env: Env, from: Address, id: u32, amount: i128) {
+        from.require_auth();
+        check_nonnegative(&env, amount);
+        spend_balance(&env, &from, id, amount);
+        env.events().publish((symbol_short!("burn"), from, id), amount);
+    }
+
+    pub fn burn_batch(env: Env, from: Address, ids: Vec<u32>, amounts: Vec<i128>) {
+        from.require_auth();
+        require_same_length(&env, ids.len(), amounts.len());
+        for i in 0..ids.len() {
+            let id = ids.get(i).unwrap();
+            let amount = amounts.get(i).unwrap();
+            check_nonnegative(&env, amount);
+            spend_balance(&env, &from, id, amount);
+        }
+        env.events().publish((symbol_short!("burnbatch"), from), (ids, amounts));
+    }
+}
+
+#[cfg(test)]
+mod test;

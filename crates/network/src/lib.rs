@@ -1,10 +1,13 @@
 //! # soroban-forge-network
 //!
-//! `soroban-forge network add|list|use` — manage named network configs
+//! `soroban-forge network add|list|use|current` — manage named network configs
 //! (RPC URL + passphrase) and select a default for other commands.
 //!
 //! Networks are stored as a JSON file at
 //! `~/.config/soroban-forge/networks.json`.
+//!
+//! `network use <name>` also writes the choice into the project's `forge.toml`
+//! so that `deploy`, `invoke`, and `verify` share a single source of truth.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -30,17 +33,26 @@ pub struct NetworkStore {
     pub default: Option<String>,
 }
 
-/// Well-known network presets, used to fill in `--rpc-url`/`--passphrase`
-/// when adding a network under one of these names without passing them.
+/// Well-known network presets. These are available without any user
+/// configuration (#289). Users can override them with `network add <name>`
+/// using the same name and `--force`.
 pub fn well_known(name: &str) -> Option<Network> {
     match name {
+        // #289 — official Stellar testnet
         "testnet" => Some(Network {
             rpc_url: "https://soroban-testnet.stellar.org".into(),
             network_passphrase: "Test SDF Network ; September 2015".into(),
         }),
+        // #289 — official Stellar futurenet
         "futurenet" => Some(Network {
             rpc_url: "https://rpc-futurenet.stellar.org".into(),
             network_passphrase: "Test SDF Future Network ; October 2022".into(),
+        }),
+        // #289 — official Stellar mainnet
+        "mainnet" => Some(Network {
+            rpc_url: "https://mainnet.stellar.validationcloud.io/v1/xycnx8vsxlflkqfe5zuek5lgq".into(),
+            // Canonical mainnet passphrase
+            network_passphrase: "Public Global Stellar Network ; September 2015".into(),
         }),
         "localnet" => Some(Network {
             rpc_url: "http://localhost:8000/soroban/rpc".into(),
@@ -84,24 +96,170 @@ pub fn save_store(path: &PathBuf, store: &NetworkStore) -> Result<()> {
         .map_err(ForgeError::io(format!("writing {}", path.display())))
 }
 
+/// Resolve a network by name: check the user store first, then fall back to
+/// built-in presets. This makes the three built-in networks (#289) available
+/// without any prior `network add` call.
+pub fn resolve_network(store: &NetworkStore, name: &str) -> Option<Network> {
+    if let Some(n) = store.networks.get(name) {
+        return Some(n.clone());
+    }
+    well_known(name)
+}
+
+/// Determine the effective active network name.
+///
+/// Priority (highest first):
+/// 1. `--network` on the command line (passed in as `cli_override`)
+/// 2. `[network] name` in `forge.toml` (from `ctx.config`)
+/// 3. `default` field in `networks.json`
+pub fn active_network_name<'a>(
+    store: &'a NetworkStore,
+    ctx: &'a ForgeContext,
+    cli_override: Option<&'a str>,
+) -> Option<&'a str> {
+    if let Some(name) = cli_override {
+        return Some(name);
+    }
+    if let Some(name) = ctx.config.as_ref().and_then(|c| c.network.name.as_deref()) {
+        return Some(name);
+    }
+    store.default.as_deref()
+}
+
+/// Persist the active network choice into `forge.toml` in `cwd`.
+///
+/// If the file does not exist it is created with just the `[network]` section.
+/// If it exists the `[network]` section is patched (or appended) without
+/// disturbing any other content.
+pub fn write_network_to_forge_toml(cwd: &std::path::Path, name: &str) -> Result<()> {
+    let path = cwd.join("forge.toml");
+
+    let existing = if path.is_file() {
+        std::fs::read_to_string(&path)
+            .map_err(ForgeError::io(format!("reading {}", path.display())))?
+    } else {
+        String::new()
+    };
+
+    let updated = patch_forge_toml_network(&existing, name);
+    std::fs::write(&path, updated)
+        .map_err(ForgeError::io(format!("writing {}", path.display())))
+}
+
+/// Patch (or append) the `[network]` section in raw `forge.toml` text.
+///
+/// Rules:
+/// - If a `[network]` section already exists, the `name = …` key within it is
+///   replaced (or inserted if missing). Other keys in the section are preserved.
+/// - If no `[network]` section exists, one is appended.
+pub fn patch_forge_toml_network(existing: &str, name: &str) -> String {
+    // We do a simple line-by-line pass instead of a full TOML parse/re-emit
+    // so we preserve all comments and formatting.
+    let original_lines: Vec<&str> = existing.lines().collect();
+    let mut out_lines: Vec<String> = Vec::with_capacity(original_lines.len() + 3);
+
+    let mut in_network_section = false;
+    let mut name_key_written = false;
+    let mut network_section_header_idx: Option<usize> = None;
+
+    for line in &original_lines {
+        let trimmed = line.trim();
+
+        if trimmed == "[network]" {
+            in_network_section = true;
+            network_section_header_idx = Some(out_lines.len());
+            out_lines.push(line.to_string());
+            continue;
+        }
+
+        // Entering a new section other than [network]
+        if trimmed.starts_with('[') && trimmed.ends_with(']') {
+            // If we were in [network] and never wrote the name key, insert it now
+            // (before this new section header)
+            if in_network_section && !name_key_written {
+                out_lines.push(format!("name = \"{name}\""));
+                name_key_written = true;
+            }
+            in_network_section = false;
+            out_lines.push(line.to_string());
+            continue;
+        }
+
+        // Replace the `name = ...` key inside [network]
+        if in_network_section && !name_key_written {
+            if let Some(eq_pos) = trimmed.find('=') {
+                let key = trimmed[..eq_pos].trim();
+                if key == "name" {
+                    out_lines.push(format!("name = \"{name}\""));
+                    name_key_written = true;
+                    continue; // skip the old line
+                }
+            }
+        }
+
+        out_lines.push(line.to_string());
+    }
+
+    // EOF while still inside [network] and name was never written
+    if in_network_section && !name_key_written {
+        out_lines.push(format!("name = \"{name}\""));
+        name_key_written = true;
+    }
+
+    // No [network] section found at all — append
+    if network_section_header_idx.is_none() && !name_key_written {
+        if !out_lines.is_empty() && !out_lines.last().map(|l| l.is_empty()).unwrap_or(true) {
+            out_lines.push(String::new());
+        }
+        out_lines.push("[network]".to_string());
+        out_lines.push(format!("name = \"{name}\""));
+    }
+
+    let mut result = out_lines.join("\n");
+    if !result.ends_with('\n') {
+        result.push('\n');
+    }
+    result
+}
+
 /// Format the network list for display.
 pub fn format_list(store: &NetworkStore) -> String {
-    if store.networks.is_empty() {
-        return "no networks configured. Use `soroban-forge network add <name> --rpc-url <url> --passphrase <passphrase>` to add one.\n".to_string();
+    // Collect user-defined networks plus built-in presets (#289).
+    // Built-ins that have been overridden by the user store show the user value.
+    let builtins = ["testnet", "futurenet", "mainnet", "localnet"];
+    let mut all_names: Vec<&str> = store.networks.keys().map(String::as_str).collect();
+    for b in &builtins {
+        if !store.networks.contains_key(*b) {
+            all_names.push(b);
+        }
     }
+    all_names.sort();
+
+    if all_names.is_empty() {
+        return "no networks available.\n".to_string();
+    }
+
     let mut out = String::from("configured networks:\n\n");
-    let name_width = store.networks.keys().map(|k| k.len()).max().unwrap_or(0);
-    for (name, network) in &store.networks {
-        let marker = if store.default.as_deref() == Some(name.as_str()) {
+    let name_width = all_names.iter().map(|k| k.len()).max().unwrap_or(0);
+    for name in &all_names {
+        let network = resolve_network(store, name).expect("name came from store or builtin");
+        let marker = if store.default.as_deref() == Some(name) {
             "*"
         } else {
             " "
         };
+        // Tag built-ins that haven't been customised
+        let tag = if store.networks.contains_key(*name) {
+            ""
+        } else {
+            "  [built-in]"
+        };
         out.push_str(&format!(
-            "{marker} {:<width$}  {}  ({})\n",
+            "{marker} {:<width$}  {}  ({}){}\n",
             name,
             network.rpc_url,
             network.network_passphrase,
+            tag,
             width = name_width
         ));
     }
@@ -122,10 +280,10 @@ impl ForgePlugin for NetworkPlugin {
             .subcommand_required(true)
             .subcommand(
                 Command::new("add")
-                    .about("Add a named network config (testnet, futurenet, localnet, or custom)")
+                    .about("Add a named network config (testnet, futurenet, mainnet, localnet, or custom)")
                     .arg(
                         Arg::new("name")
-                            .help("Name for the network (e.g. testnet, futurenet, localnet)")
+                            .help("Name for the network (e.g. testnet, futurenet, mainnet)")
                             .required(true),
                     )
                     .arg(
@@ -145,15 +303,20 @@ impl ForgePlugin for NetworkPlugin {
                             .help("Overwrite an existing network with the same name"),
                     ),
             )
-            .subcommand(Command::new("list").about("List all configured networks"))
+            .subcommand(Command::new("list").about("List all configured networks (including built-in presets)"))
             .subcommand(
                 Command::new("use")
-                    .about("Select the default network for other commands")
+                    .about("Select the default network for other commands and persist it to forge.toml")
                     .arg(
                         Arg::new("name")
                             .help("Name of the network to use as default")
                             .required(true),
                     ),
+            )
+            // #290 — new subcommand to print the current active network
+            .subcommand(
+                Command::new("current")
+                    .about("Print the currently active network name"),
             )
     }
 
@@ -214,7 +377,37 @@ impl ForgePlugin for NetworkPlugin {
             Some(("list", _sub)) => {
                 let store = load_store(&path)?;
                 if ctx.json {
-                    println!("{}", serde_json::to_string_pretty(&store).unwrap());
+                    // #289 — include built-in presets that are not in the user store
+                    let builtins = ["testnet", "futurenet", "mainnet", "localnet"];
+                    let mut all: BTreeMap<String, serde_json::Value> = BTreeMap::new();
+                    for b in &builtins {
+                        if let Some(n) = well_known(b) {
+                            all.insert(
+                                b.to_string(),
+                                serde_json::json!({
+                                    "rpc_url": n.rpc_url,
+                                    "network_passphrase": n.network_passphrase,
+                                    "built_in": true,
+                                }),
+                            );
+                        }
+                    }
+                    // User-defined entries override built-ins
+                    for (k, v) in &store.networks {
+                        all.insert(
+                            k.clone(),
+                            serde_json::json!({
+                                "rpc_url": v.rpc_url,
+                                "network_passphrase": v.network_passphrase,
+                                "built_in": false,
+                            }),
+                        );
+                    }
+                    let report = serde_json::json!({
+                        "networks": all,
+                        "default": store.default,
+                    });
+                    println!("{}", serde_json::to_string_pretty(&report).unwrap());
                 } else if !ctx.quiet {
                     print!("{}", format_list(&store));
                 }
@@ -225,20 +418,53 @@ impl ForgePlugin for NetworkPlugin {
                 let name = sub.get_one::<String>("name").unwrap();
                 let mut store = load_store(&path)?;
 
-                if !store.networks.contains_key(name.as_str()) {
+                // #289 — also accept built-in names that aren't in the user store
+                let network_exists =
+                    store.networks.contains_key(name.as_str()) || well_known(name.as_str()).is_some();
+                if !network_exists {
                     return Err(ForgeError::InvalidArgument(format!(
-                        "network `{name}` not found (use `soroban-forge network list` to see configured networks)"
+                        "network `{name}` not found (use `soroban-forge network list` to see available networks)"
                     )));
                 }
 
                 store.default = Some(name.clone());
                 save_store(&path, &store)?;
 
+                // #290 — persist the choice into forge.toml so deploy/invoke/verify pick it up
+                write_network_to_forge_toml(&ctx.cwd, name)?;
+
                 if ctx.json {
                     let report = serde_json::json!({ "default": name });
                     println!("{}", serde_json::to_string_pretty(&report).unwrap());
                 } else if !ctx.quiet {
                     println!("using `{name}` as the default network");
+                    println!("  recorded in forge.toml and networks.json");
+                }
+                Ok(())
+            }
+
+            // #290 — new `network current` subcommand
+            Some(("current", _sub)) => {
+                let store = load_store(&path)?;
+                let current = active_network_name(&store, ctx, None);
+
+                if ctx.json {
+                    let report = serde_json::json!({ "current": current });
+                    println!("{}", serde_json::to_string_pretty(&report).unwrap());
+                } else if !ctx.quiet {
+                    match current {
+                        Some(name) => {
+                            println!("active network: {name}");
+                            if let Some(net) = resolve_network(&store, name) {
+                                println!("  rpc url:    {}", net.rpc_url);
+                                println!("  passphrase: {}", net.network_passphrase);
+                            }
+                        }
+                        None => {
+                            println!("no active network selected");
+                            println!("  hint: run `soroban-forge network use testnet` to select one");
+                        }
+                    }
                 }
                 Ok(())
             }
@@ -288,18 +514,56 @@ mod tests {
         assert!(store.default.is_none());
     }
 
+    // #289 — three built-in networks must be available
     #[test]
-    fn well_known_covers_testnet_futurenet_localnet() {
-        assert!(well_known("testnet").is_some());
-        assert!(well_known("futurenet").is_some());
+    fn well_known_covers_testnet_futurenet_mainnet_localnet() {
+        let testnet = well_known("testnet").expect("testnet should be a built-in");
+        assert_eq!(testnet.network_passphrase, "Test SDF Network ; September 2015");
+
+        let futurenet = well_known("futurenet").expect("futurenet should be a built-in");
+        assert_eq!(futurenet.network_passphrase, "Test SDF Future Network ; October 2022");
+
+        // #289 — mainnet is now a built-in
+        let mainnet = well_known("mainnet").expect("mainnet should be a built-in");
+        assert_eq!(mainnet.network_passphrase, "Public Global Stellar Network ; September 2015");
+
         assert!(well_known("localnet").is_some());
-        assert!(well_known("mainnet").is_none());
+        assert!(well_known("custom-xyz").is_none());
+    }
+
+    // #289 — built-ins are available via resolve_network without user configuration
+    #[test]
+    fn resolve_network_falls_back_to_built_ins() {
+        let store = NetworkStore::default();
+        assert!(resolve_network(&store, "testnet").is_some());
+        assert!(resolve_network(&store, "futurenet").is_some());
+        assert!(resolve_network(&store, "mainnet").is_some());
+        assert!(resolve_network(&store, "localnet").is_some());
+        assert!(resolve_network(&store, "custom-xyz").is_none());
+    }
+
+    // #289 — user-defined entries override built-ins
+    #[test]
+    fn user_store_overrides_built_in() {
+        let mut store = NetworkStore::default();
+        store.networks.insert(
+            "testnet".into(),
+            Network {
+                rpc_url: "https://my-custom-rpc.example.com".into(),
+                network_passphrase: "Test SDF Network ; September 2015".into(),
+            },
+        );
+        let net = resolve_network(&store, "testnet").unwrap();
+        assert_eq!(net.rpc_url, "https://my-custom-rpc.example.com");
     }
 
     #[test]
-    fn format_list_empty() {
+    fn format_list_empty_store_still_shows_builtins() {
         let store = NetworkStore::default();
-        assert!(format_list(&store).contains("no networks configured"));
+        let out = format_list(&store);
+        assert!(out.contains("testnet"), "{out}");
+        assert!(out.contains("futurenet"), "{out}");
+        assert!(out.contains("mainnet"), "{out}");
     }
 
     #[test]
@@ -334,11 +598,84 @@ mod tests {
         assert!(sub_names.contains(&"add"));
         assert!(sub_names.contains(&"list"));
         assert!(sub_names.contains(&"use"));
+        // #290 — current subcommand must exist
+        assert!(sub_names.contains(&"current"), "network command must have 'current' subcommand");
     }
 
     #[test]
     fn plugin_name_matches_its_command() {
         let plugin = NetworkPlugin;
         assert_eq!(plugin.name(), plugin.command().get_name());
+    }
+
+    // #290 — patch_forge_toml_network: create section from empty file
+    #[test]
+    fn patch_creates_network_section_in_empty_file() {
+        let result = patch_forge_toml_network("", "testnet");
+        assert!(result.contains("[network]"), "{result}");
+        assert!(result.contains("name = \"testnet\""), "{result}");
+    }
+
+    // #290 — patch_forge_toml_network: create section when other sections exist
+    #[test]
+    fn patch_appends_network_section_to_existing_file() {
+        let existing = "[project]\nname = \"demo\"\n";
+        let result = patch_forge_toml_network(existing, "testnet");
+        assert!(result.contains("[project]"), "{result}");
+        assert!(result.contains("[network]"), "{result}");
+        assert!(result.contains("name = \"testnet\""), "{result}");
+    }
+
+    // #290 — patch_forge_toml_network: update existing name key
+    #[test]
+    fn patch_updates_existing_name_key() {
+        let existing = "[network]\nname = \"localnet\"\n";
+        let result = patch_forge_toml_network(existing, "testnet");
+        assert!(result.contains("name = \"testnet\""), "{result}");
+        assert!(!result.contains("name = \"localnet\""), "old name must be replaced: {result}");
+    }
+
+    // #290 — patch_forge_toml_network: insert name key when section exists but name is missing
+    #[test]
+    fn patch_inserts_name_into_existing_network_section_without_name() {
+        let existing = "[network]\nrpc_url = \"https://example.com\"\n";
+        let result = patch_forge_toml_network(existing, "testnet");
+        assert!(result.contains("name = \"testnet\""), "{result}");
+        assert!(result.contains("rpc_url"), "other keys must be preserved: {result}");
+    }
+
+    // #290 — write_network_to_forge_toml creates the file if it doesn't exist
+    #[test]
+    fn write_network_creates_forge_toml_if_absent() {
+        let dir = tempfile::tempdir().unwrap();
+        write_network_to_forge_toml(dir.path(), "testnet").unwrap();
+        let content = std::fs::read_to_string(dir.path().join("forge.toml")).unwrap();
+        assert!(content.contains("name = \"testnet\""), "{content}");
+    }
+
+    // #290 — active_network_name: cli override wins
+    #[test]
+    fn active_network_name_cli_override_wins() {
+        use soroban_forge_core::ForgeContext;
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = NetworkStore::default();
+        store.default = Some("futurenet".into());
+        let ctx = ForgeContext::new(dir.path().to_path_buf(), 0).unwrap();
+        assert_eq!(
+            active_network_name(&store, &ctx, Some("mainnet")),
+            Some("mainnet")
+        );
+    }
+
+    // #290 — active_network_name: forge.toml wins over networks.json default
+    #[test]
+    fn active_network_name_forge_toml_beats_store_default() {
+        use soroban_forge_core::ForgeContext;
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("forge.toml"), "[network]\nname = \"futurenet\"\n").unwrap();
+        let mut store = NetworkStore::default();
+        store.default = Some("localnet".into());
+        let ctx = ForgeContext::new(dir.path().to_path_buf(), 0).unwrap();
+        assert_eq!(active_network_name(&store, &ctx, None), Some("futurenet"));
     }
 }

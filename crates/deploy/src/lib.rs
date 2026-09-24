@@ -169,19 +169,33 @@ pub fn build_if_needed(dir: &Path, wasm_override: Option<&Path>) -> Result<PathB
     Ok(wasm_path)
 }
 
+/// Assemble the full `stellar contract deploy` argument list.
+pub fn build_deploy_args(wasm: &Path, source: &str, network: &NetworkArgs) -> Result<Vec<String>> {
+    let wasm_str = path_str(wasm)?.to_string();
+    let mut args = vec![
+        "contract".to_string(),
+        "deploy".to_string(),
+        "--wasm".to_string(),
+        wasm_str,
+        "--source".to_string(),
+        source.to_string(),
+    ];
+    args.extend(network.cli_args());
+    Ok(args)
+}
+
 /// Deploy `wasm` with `stellar contract deploy` and return the resulting
 /// contract ID. Never reimplemented locally.
 ///
 /// Thin system-touching wrapper; not unit-tested.
 fn run_stellar_deploy(wasm: &Path, source: &str, network: &NetworkArgs) -> Result<String> {
-    let wasm_str = path_str(wasm)?;
+    let args = build_deploy_args(wasm, source, network)?;
+    log::debug!("deploying {}", wasm.display());
 
-    let mut cmd = std::process::Command::new("stellar");
-    cmd.args(["contract", "deploy", "--wasm", wasm_str, "--source", source]);
-    cmd.args(network.cli_args());
-    log::debug!("deploying {wasm_str}");
+    let result = std::process::Command::new("stellar")
+        .args(&args)
+        .output();
 
-    let result = cmd.output();
     match result {
         Ok(out) if out.status.success() => {
             let stdout = String::from_utf8_lossy(&out.stdout);
@@ -229,6 +243,42 @@ pub fn deploy(
     run_stellar_deploy(&wasm_path, source, network)
 }
 
+/// Names of arguments that may contain secret material and must be redacted
+/// in dry-run output. The values of these flags are replaced with `<redacted>`.
+const SECRET_FLAGS: &[&str] = &["--source", "--secret-key", "--private-key"];
+
+/// Return a shell-quoted command string with secret values redacted.
+///
+/// `program` is the executable name (e.g. `"stellar"`), `args` is the list of
+/// arguments that would be passed. The result is suitable for printing to
+/// stdout; it never contains actual key material.
+pub fn format_dry_run_command(program: &str, args: &[String]) -> String {
+    let mut parts: Vec<String> = vec![program.to_string()];
+    let mut redact_next = false;
+    for arg in args {
+        if redact_next {
+            parts.push("<redacted>".to_string());
+            redact_next = false;
+        } else if SECRET_FLAGS.contains(&arg.as_str()) {
+            parts.push(shell_quote(arg));
+            redact_next = true;
+        } else {
+            parts.push(shell_quote(arg));
+        }
+    }
+    parts.join(" ")
+}
+
+/// Minimal shell-quoting: wrap in single quotes when the value contains
+/// characters that would be interpreted by a shell.
+fn shell_quote(s: &str) -> String {
+    if s.chars().all(|c| c.is_alphanumeric() || matches!(c, '-' | '_' | '.' | '/' | ':')) {
+        s.to_string()
+    } else {
+        format!("'{}'", s.replace('\'', r"'\''"))
+    }
+}
+
 /// The `deploy` subcommand.
 pub struct DeployPlugin;
 
@@ -274,10 +324,20 @@ impl ForgePlugin for DeployPlugin {
                     .long("network-passphrase")
                     .help("Network passphrase for --rpc-url"),
             )
+            .arg(
+                Arg::new("dry-run")
+                    .long("dry-run")
+                    .action(clap::ArgAction::SetTrue)
+                    .help("Print the stellar command that would be run without submitting anything"),
+            )
     }
 
     fn run(&self, matches: &ArgMatches, ctx: &ForgeContext) -> Result<()> {
-        if ctx.offline {
+        let dry_run = matches.get_flag("dry-run");
+
+        // --dry-run does not submit anything but does need to resolve the wasm
+        // path to show the full command; it is therefore allowed in offline mode.
+        if ctx.offline && !dry_run {
             return Err(ForgeError::InvalidArgument(
                 "deploy is unavailable in offline mode because it submits a transaction".into(),
             ));
@@ -297,6 +357,19 @@ impl ForgePlugin for DeployPlugin {
             matches.get_one::<String>("rpc-url").cloned(),
             matches.get_one::<String>("network-passphrase").cloned(),
         );
+
+        if dry_run {
+            let wasm_path = build_if_needed(&dir, wasm_override.as_deref())?;
+            let args = build_deploy_args(&wasm_path, source, &network)?;
+            let command_line = format_dry_run_command("stellar", &args);
+            if ctx.json {
+                let report = serde_json::json!({ "command": command_line });
+                println!("{}", serde_json::to_string_pretty(&report).unwrap());
+            } else {
+                println!("{command_line}");
+            }
+            return Ok(());
+        }
 
         let contract_id = deploy(&dir, wasm_override.as_deref(), source, &network)?;
 
@@ -416,5 +489,66 @@ mod tests {
         assert!(help.contains("--source"), "{help}");
         assert!(help.contains("--network"), "{help}");
         assert!(help.contains("IDENTITY"), "{help}");
+    }
+
+    #[test]
+    fn help_documents_dry_run() {
+        let help = DeployPlugin.command().render_long_help().to_string();
+        assert!(help.contains("--dry-run"), "{help}");
+    }
+
+    #[test]
+    fn build_deploy_args_assembles_full_command() {
+        let tmp = tempfile::tempdir().unwrap();
+        let wasm = tmp.path().join("my_contract.wasm");
+        std::fs::write(&wasm, b"\0asm").unwrap();
+        let network = NetworkArgs::resolve(None, None, None);
+        let args = build_deploy_args(&wasm, "alice", &network).unwrap();
+        assert_eq!(args[0], "contract");
+        assert_eq!(args[1], "deploy");
+        assert!(args.contains(&"--wasm".to_string()));
+        assert!(args.contains(&"--source".to_string()));
+        assert!(args.contains(&"alice".to_string()));
+        assert!(args.contains(&"--network".to_string()));
+        assert!(args.contains(&"testnet".to_string()));
+    }
+
+    #[test]
+    fn format_dry_run_redacts_source_value() {
+        let args = vec![
+            "contract".to_string(),
+            "deploy".to_string(),
+            "--source".to_string(),
+            "SCZANGBA5YELKNYAXSWI2YQNMN7HAIYE".to_string(),
+            "--network".to_string(),
+            "testnet".to_string(),
+        ];
+        let cmd = format_dry_run_command("stellar", &args);
+        assert!(!cmd.contains("SCZANGBA5YELKNYAXSWI2YQNMN7HAIYE"), "secret must be redacted: {cmd}");
+        assert!(cmd.contains("<redacted>"), "placeholder must be present: {cmd}");
+        assert!(cmd.contains("--network"), "network must be retained: {cmd}");
+        assert!(cmd.contains("testnet"), "network value must be retained: {cmd}");
+    }
+
+    #[test]
+    fn format_dry_run_includes_all_non_secret_args() {
+        let args = vec![
+            "contract".to_string(),
+            "deploy".to_string(),
+            "--wasm".to_string(),
+            "target/wasm32v1-none/release/my.wasm".to_string(),
+            "--source".to_string(),
+            "alice".to_string(),
+            "--network".to_string(),
+            "testnet".to_string(),
+        ];
+        let cmd = format_dry_run_command("stellar", &args);
+        assert!(cmd.starts_with("stellar"), "{cmd}");
+        assert!(cmd.contains("contract"), "{cmd}");
+        assert!(cmd.contains("deploy"), "{cmd}");
+        assert!(cmd.contains("--wasm"), "{cmd}");
+        // --source value "alice" looks like a plain identity name, but it's
+        // still treated as a secret and redacted.
+        assert!(cmd.contains("<redacted>"), "{cmd}");
     }
 }

@@ -188,7 +188,11 @@ impl NetworkArgs {
         let cli_rpc = rpc_url;
         let network = match (cli_network.as_ref(), cli_rpc.as_ref()) {
             (Some(name), _) => Some(name.clone()),
-            (None, None) => Some(cfg.name.clone().unwrap_or_else(|| DEFAULT_NETWORK.to_string())),
+            (None, None) => Some(
+                cfg.name
+                    .clone()
+                    .unwrap_or_else(|| DEFAULT_NETWORK.to_string()),
+            ),
             (None, Some(_)) => cfg.name.clone(),
         };
         let rpc_url = cli_rpc.or(cfg.rpc_url);
@@ -239,6 +243,9 @@ pub struct VerifyReport {
     /// Whether the two hashes are identical.
     #[serde(rename = "match")]
     pub matches: bool,
+    /// On a mismatch, what changed in the interface. `None` on a match.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub spec_diff: Option<SpecDiffOutcome>,
 }
 
 impl VerifyReport {
@@ -259,8 +266,181 @@ impl VerifyReport {
             matches: local_hash == onchain_hash,
             local_hash,
             onchain_hash,
+            spec_diff: None,
         }
     }
+
+    /// Attach the interface diff computed for a mismatch.
+    pub fn with_spec_diff(mut self, spec_diff: SpecDiffOutcome) -> Self {
+        self.spec_diff = Some(spec_diff);
+        self
+    }
+}
+
+/// An entrypoint present on both sides whose signature differs.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ChangedEntrypoint {
+    pub name: String,
+    /// Signature in the deployed contract.
+    pub onchain: String,
+    /// Signature in the local build.
+    pub local: String,
+}
+
+/// Interface differences between the deployed contract and the local build,
+/// read in the direction "what would redeploying the local build change".
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct SpecDiff {
+    /// Entrypoints only the local build has (signatures).
+    pub added: Vec<String>,
+    /// Entrypoints only the deployed contract has (signatures).
+    pub removed: Vec<String>,
+    pub changed: Vec<ChangedEntrypoint>,
+}
+
+impl SpecDiff {
+    /// True when both interfaces expose identical entrypoints — the bytes
+    /// differ for another reason (implementation, build flags, docs).
+    pub fn is_empty(&self) -> bool {
+        self.added.is_empty() && self.removed.is_empty() && self.changed.is_empty()
+    }
+}
+
+/// Result of trying to diff the two interfaces. A failure to read either
+/// spec never turns a mismatch into a different error — the hash verdict
+/// stands and the reason is reported alongside it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum SpecDiffOutcome {
+    Available(SpecDiff),
+    Unavailable { reason: String },
+}
+
+/// One entrypoint, as read from `stellar contract info interface --output json`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Entrypoint {
+    name: String,
+    signature: String,
+}
+
+/// Pull the `function_v0` entries out of a spec JSON document and render
+/// each as `name(arg: type, …) -> type`.
+fn parse_entrypoints(spec_json: &str) -> Result<Vec<Entrypoint>> {
+    let entries: serde_json::Value = serde_json::from_str(spec_json)
+        .map_err(|e| ForgeError::Other(format!("could not parse contract spec JSON: {e}")))?;
+    let entries = entries
+        .as_array()
+        .ok_or_else(|| ForgeError::Other("contract spec JSON is not a list of entries".into()))?;
+
+    let mut out = Vec::new();
+    for entry in entries {
+        let Some(func) = entry.get("function_v0") else {
+            continue;
+        };
+        let name = func["name"].as_str().unwrap_or_default().to_string();
+        let inputs = func["inputs"]
+            .as_array()
+            .map(|inputs| {
+                inputs
+                    .iter()
+                    .map(|input| {
+                        format!(
+                            "{}: {}",
+                            input["name"].as_str().unwrap_or("_"),
+                            render_type(&input["type"])
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+            .unwrap_or_default();
+        let outputs: Vec<String> = func["outputs"]
+            .as_array()
+            .map(|outputs| outputs.iter().map(render_type).collect())
+            .unwrap_or_default();
+        let signature = match outputs.as_slice() {
+            [] => format!("{name}({inputs})"),
+            [single] => format!("{name}({inputs}) -> {single}"),
+            many => format!("{name}({inputs}) -> ({})", many.join(", ")),
+        };
+        out.push(Entrypoint { name, signature });
+    }
+    Ok(out)
+}
+
+/// Render an `ScSpecTypeDef` from the CLI's JSON as a compact type string.
+/// Anything unrecognised falls back to its JSON, so a newer spec version
+/// still diffs correctly — it just reads less nicely.
+fn render_type(ty: &serde_json::Value) -> String {
+    use serde_json::Value;
+
+    if let Value::String(name) = ty {
+        return name.clone();
+    }
+    let Some((kind, inner)) = ty
+        .as_object()
+        .filter(|o| o.len() == 1)
+        .and_then(|o| o.iter().next())
+    else {
+        return ty.to_string();
+    };
+    match kind.as_str() {
+        "udt" => inner["name"]
+            .as_str()
+            .map(str::to_string)
+            .unwrap_or_else(|| ty.to_string()),
+        "vec" => format!("vec<{}>", render_type(&inner["element_type"])),
+        "option" => format!("option<{}>", render_type(&inner["value_type"])),
+        "map" => format!(
+            "map<{}, {}>",
+            render_type(&inner["key_type"]),
+            render_type(&inner["value_type"])
+        ),
+        "result" => format!(
+            "result<{}, {}>",
+            render_type(&inner["ok_type"]),
+            render_type(&inner["error_type"])
+        ),
+        "tuple" => {
+            let types: Vec<String> = inner["value_types"]
+                .as_array()
+                .map(|types| types.iter().map(render_type).collect())
+                .unwrap_or_default();
+            format!("({})", types.join(", "))
+        }
+        "bytes_n" => format!("bytes<{}>", inner["n"]),
+        _ => ty.to_string(),
+    }
+}
+
+/// Compare two interfaces given as `stellar contract info interface` JSON.
+pub fn diff_specs(onchain_json: &str, local_json: &str) -> Result<SpecDiff> {
+    use std::collections::BTreeMap;
+
+    let index = |entries: Vec<Entrypoint>| -> BTreeMap<String, String> {
+        entries.into_iter().map(|e| (e.name, e.signature)).collect()
+    };
+    let onchain = index(parse_entrypoints(onchain_json)?);
+    let local = index(parse_entrypoints(local_json)?);
+
+    let mut diff = SpecDiff::default();
+    for (name, local_sig) in &local {
+        match onchain.get(name) {
+            None => diff.added.push(local_sig.clone()),
+            Some(onchain_sig) if onchain_sig != local_sig => diff.changed.push(ChangedEntrypoint {
+                name: name.clone(),
+                onchain: onchain_sig.clone(),
+                local: local_sig.clone(),
+            }),
+            Some(_) => {}
+        }
+    }
+    for (name, onchain_sig) in &onchain {
+        if !local.contains_key(name) {
+            diff.removed.push(onchain_sig.clone());
+        }
+    }
+    Ok(diff)
 }
 
 /// Human-readable report, printed unless `--quiet`.
@@ -281,11 +461,44 @@ pub fn format_report(report: &VerifyReport) -> String {
         out.push_str(&format!("  local      sha256 {}\n", report.local_hash));
         out.push_str(&format!("  on-chain   sha256 {}\n", report.onchain_hash));
         out.push('\n');
+        if let Some(outcome) = &report.spec_diff {
+            out.push_str(&format_spec_diff(outcome));
+            out.push('\n');
+        }
         out.push_str(
             "the deployed wasm was built from different sources or with different\n\
              build flags — rebuild with `stellar contract build` and redeploy, or\n\
              check that --network points at the deployment you meant.\n",
         );
+    }
+    out
+}
+
+/// The interface section of a mismatch report.
+pub fn format_spec_diff(outcome: &SpecDiffOutcome) -> String {
+    let diff = match outcome {
+        SpecDiffOutcome::Unavailable { reason } => {
+            return format!("  interface diff unavailable: {reason}\n");
+        }
+        SpecDiffOutcome::Available(diff) => diff,
+    };
+    if diff.is_empty() {
+        return "  interface unchanged — the entrypoints are identical, so the difference is \
+                in the implementation or build settings\n"
+            .to_string();
+    }
+
+    let mut out = String::from("  interface changes (on-chain → local):\n");
+    for sig in &diff.added {
+        out.push_str(&format!("    + {sig}\n"));
+    }
+    for sig in &diff.removed {
+        out.push_str(&format!("    - {sig}\n"));
+    }
+    for change in &diff.changed {
+        out.push_str(&format!("    ~ {}\n", change.name));
+        out.push_str(&format!("        on-chain  {}\n", change.onchain));
+        out.push_str(&format!("        local     {}\n", change.local));
     }
     out
 }
@@ -344,6 +557,54 @@ fn fetch_onchain_wasm(contract_id: &str, network: &NetworkArgs, out_file: &Path)
     }
 }
 
+/// Read a wasm's interface as JSON with `stellar contract info interface`.
+///
+/// Thin system-touching wrapper; not unit-tested.
+fn read_interface_json(wasm: &Path) -> Result<String> {
+    let wasm_str = path_str(wasm)?;
+    let out = std::process::Command::new("stellar")
+        .args([
+            "contract",
+            "info",
+            "interface",
+            "--wasm",
+            wasm_str,
+            "--output",
+            "json",
+        ])
+        .output();
+    match out {
+        Ok(out) if out.status.success() => Ok(String::from_utf8_lossy(&out.stdout).into_owned()),
+        Ok(out) => Err(ForgeError::Other(format!(
+            "stellar contract info interface failed for {}: {}",
+            wasm.display(),
+            String::from_utf8_lossy(&out.stderr).trim()
+        ))),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            Err(ForgeError::ToolMissing("stellar-cli".into()))
+        }
+        Err(e) => Err(ForgeError::io("running stellar contract info interface")(e)),
+    }
+}
+
+/// Diff the interfaces of the deployed and local wasm. Never fails: any
+/// problem reading either spec becomes [`SpecDiffOutcome::Unavailable`].
+fn spec_diff_for(onchain_wasm: &Path, local_wasm: &Path) -> SpecDiffOutcome {
+    let result = read_interface_json(onchain_wasm).and_then(|onchain| {
+        let local = read_interface_json(local_wasm)?;
+        diff_specs(&onchain, &local)
+    });
+    match result {
+        Ok(diff) => SpecDiffOutcome::Available(diff),
+        Err(e) => {
+            log::debug!("spec diff unavailable: {e}");
+            SpecDiffOutcome::Unavailable {
+                reason: e.to_string(),
+            }
+        }
+    }
+}
+
 fn path_str(path: &Path) -> Result<&str> {
     path.to_str()
         .ok_or_else(|| ForgeError::Other(format!("path {} is not valid UTF-8", path.display())))
@@ -376,13 +637,20 @@ pub fn verify(
     fetch_onchain_wasm(contract_id, network, &fetched)?;
     let onchain_hash = hash_wasm_file(&fetched)?;
 
-    Ok(VerifyReport::new(
+    let report = VerifyReport::new(
         contract_id,
         network.label(),
         &local_wasm,
         local_hash,
         onchain_hash,
-    ))
+    );
+    if report.matches {
+        return Ok(report);
+    }
+    // Both wasm files are already on disk, so the diff costs no extra
+    // network round-trip.
+    let diff = spec_diff_for(&fetched, &local_wasm);
+    Ok(report.with_spec_diff(diff))
 }
 
 /// Run the official soroban build inside the pinned image and return the
@@ -523,7 +791,13 @@ impl ForgePlugin for VerifyPlugin {
         );
 
         let reproducible = matches.get_flag("reproducible");
-        let report = verify(contract_id, &dir, wasm_override.as_deref(), &network, reproducible)?;
+        let report = verify(
+            contract_id,
+            &dir,
+            wasm_override.as_deref(),
+            &network,
+            reproducible,
+        )?;
 
         if ctx.json {
             println!("{}", json_report(&report));
@@ -762,6 +1036,169 @@ mod tests {
             soroban_forge_core::error::ExitCode::UserError
         );
         assert!(err.to_string().contains("aa") && err.to_string().contains("bb"));
+    }
+
+    /// A spec JSON document in the shape `stellar contract info interface
+    /// --output json` emits, with one `function_v0` per `(name, inputs, output)`.
+    /// `(name, [(arg, type)], return type)`.
+    type FuncSpec<'a> = (
+        &'a str,
+        &'a [(&'a str, serde_json::Value)],
+        Option<serde_json::Value>,
+    );
+
+    fn spec_json(funcs: &[FuncSpec]) -> String {
+        let mut entries: Vec<serde_json::Value> = funcs
+            .iter()
+            .map(|(name, inputs, output)| {
+                let inputs: Vec<_> = inputs
+                    .iter()
+                    .map(|(n, t)| serde_json::json!({"doc": "", "name": n, "type": t}))
+                    .collect();
+                let outputs: Vec<_> = output.iter().cloned().collect();
+                serde_json::json!({"function_v0": {"doc": "", "name": name, "inputs": inputs, "outputs": outputs}})
+            })
+            .collect();
+        // Non-function entries must be ignored by the entrypoint diff.
+        entries.push(serde_json::json!({"udt_error_enum_v0": {"name": "Error", "cases": []}}));
+        serde_json::to_string(&entries).unwrap()
+    }
+
+    #[test]
+    fn diff_lists_added_removed_and_changed_entrypoints() {
+        use serde_json::json;
+        let onchain = spec_json(&[
+            ("balance", &[("id", json!("address"))], Some(json!("i128"))),
+            (
+                "burn",
+                &[("from", json!("address")), ("amount", json!("i128"))],
+                None,
+            ),
+            ("name", &[], Some(json!("string"))),
+        ]);
+        let local = spec_json(&[
+            ("balance", &[("id", json!("address"))], Some(json!("u128"))),
+            ("name", &[], Some(json!("string"))),
+            (
+                "mint",
+                &[("to", json!("address")), ("amount", json!("i128"))],
+                None,
+            ),
+        ]);
+
+        let diff = diff_specs(&onchain, &local).unwrap();
+        assert_eq!(diff.added, vec!["mint(to: address, amount: i128)"]);
+        assert_eq!(diff.removed, vec!["burn(from: address, amount: i128)"]);
+        assert_eq!(
+            diff.changed,
+            vec![ChangedEntrypoint {
+                name: "balance".into(),
+                onchain: "balance(id: address) -> i128".into(),
+                local: "balance(id: address) -> u128".into(),
+            }]
+        );
+    }
+
+    #[test]
+    fn identical_interfaces_produce_an_empty_diff() {
+        let spec = spec_json(&[("hello", &[("to", serde_json::json!("symbol"))], None)]);
+        assert!(diff_specs(&spec, &spec).unwrap().is_empty());
+    }
+
+    #[test]
+    fn renders_compound_types() {
+        use serde_json::json;
+        let ty = json!({"result": {
+            "ok_type": {"vec": {"element_type": {"option": {"value_type": {"udt": {"name": "Offer"}}}}}},
+            "error_type": {"udt": {"name": "Error"}}
+        }});
+        assert_eq!(render_type(&ty), "result<vec<option<Offer>>, Error>");
+        assert_eq!(
+            render_type(
+                &json!({"map": {"key_type": "symbol", "value_type": {"bytes_n": {"n": 32}}}})
+            ),
+            "map<symbol, bytes<32>>"
+        );
+        assert_eq!(render_type(&json!({"tuple": {"value_types": []}})), "()");
+        // Unknown shapes still compare correctly via their JSON.
+        assert_eq!(render_type(&json!({"future": 1})), r#"{"future":1}"#);
+    }
+
+    #[test]
+    fn malformed_spec_json_is_an_error_not_a_panic() {
+        assert!(diff_specs("not json", "[]").is_err());
+        assert!(diff_specs("{}", "[]").is_err());
+    }
+
+    #[test]
+    fn mismatch_report_prints_the_interface_changes() {
+        let diff = SpecDiff {
+            added: vec!["mint(to: address)".into()],
+            removed: vec!["burn(from: address)".into()],
+            changed: vec![ChangedEntrypoint {
+                name: "balance".into(),
+                onchain: "balance(id: address) -> i128".into(),
+                local: "balance(id: address) -> u128".into(),
+            }],
+        };
+        let report = VerifyReport::new(VALID_ID, "testnet", Path::new("a.wasm"), "aa", "bb")
+            .with_spec_diff(SpecDiffOutcome::Available(diff));
+
+        let text = format_report(&report);
+        assert!(text.contains("+ mint(to: address)"), "{text}");
+        assert!(text.contains("- burn(from: address)"), "{text}");
+        assert!(text.contains("~ balance"), "{text}");
+        assert!(text.contains("-> u128"), "{text}");
+    }
+
+    #[test]
+    fn an_unchanged_interface_says_so() {
+        let report = VerifyReport::new(VALID_ID, "testnet", Path::new("a.wasm"), "aa", "bb")
+            .with_spec_diff(SpecDiffOutcome::Available(SpecDiff::default()));
+        assert!(format_report(&report).contains("interface unchanged"));
+    }
+
+    #[test]
+    fn an_unavailable_diff_keeps_the_mismatch_verdict() {
+        let report = VerifyReport::new(VALID_ID, "testnet", Path::new("a.wasm"), "aa", "bb")
+            .with_spec_diff(SpecDiffOutcome::Unavailable {
+                reason: "no contractspecv0 section".into(),
+            });
+
+        let text = format_report(&report);
+        assert!(text.contains("MISMATCH"), "{text}");
+        assert!(
+            text.contains("interface diff unavailable: no contractspecv0 section"),
+            "{text}"
+        );
+
+        let parsed: serde_json::Value = serde_json::from_str(&json_report(&report)).unwrap();
+        assert_eq!(parsed["match"], false);
+        assert_eq!(parsed["spec_diff"]["status"], "unavailable");
+        assert_eq!(parsed["spec_diff"]["reason"], "no contractspecv0 section");
+    }
+
+    #[test]
+    fn json_report_carries_the_spec_diff() {
+        let diff = SpecDiff {
+            added: vec!["mint(to: address)".into()],
+            ..SpecDiff::default()
+        };
+        let report = VerifyReport::new(VALID_ID, "testnet", Path::new("a.wasm"), "aa", "bb")
+            .with_spec_diff(SpecDiffOutcome::Available(diff));
+        let parsed: serde_json::Value = serde_json::from_str(&json_report(&report)).unwrap();
+
+        assert_eq!(parsed["spec_diff"]["status"], "available");
+        assert_eq!(parsed["spec_diff"]["added"][0], "mint(to: address)");
+        assert_eq!(parsed["spec_diff"]["removed"], serde_json::json!([]));
+        assert_eq!(parsed["spec_diff"]["changed"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn a_matching_report_has_no_spec_diff_in_json() {
+        let report = VerifyReport::new(VALID_ID, "testnet", Path::new("a.wasm"), "aa", "aa");
+        let parsed: serde_json::Value = serde_json::from_str(&json_report(&report)).unwrap();
+        assert!(parsed.get("spec_diff").is_none());
     }
 
     #[test]

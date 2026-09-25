@@ -22,6 +22,13 @@ Exit codes: `0` match, `1` mismatch (or a bad argument), `2` `stellar` CLI
 missing. `--json` prints the report — including `"match": true|false` and
 both hashes — so CI can branch without parsing text.
 
+On a mismatch the report also lists the entrypoints that were added,
+removed or changed between the deployed contract and the local build
+(`spec_diff` in `--json`). Both interfaces come from
+`stellar contract info interface --output json` run on the two wasm files;
+if either cannot be read, the diff is reported as unavailable and the
+mismatch verdict stands.
+
 ## Public surface
 
 - `validate_contract_id(id)` — cheap strkey shape check
@@ -34,8 +41,11 @@ both hashes — so CI can branch without parsing text.
   `stellar` arguments they map to
 - `verify(contract_id, dir, wasm_override, network) -> VerifyReport` — the
   programmatic API behind the subcommand
-- `format_report` / `json_report` / `mismatch_error` — output and the error
-  a mismatch becomes
+- `diff_specs(onchain_json, local_json) -> SpecDiff` — entrypoint diff of
+  two `stellar contract info interface --output json` documents
+- `SpecDiffOutcome` — the diff, or why it is unavailable
+- `format_report` / `format_spec_diff` / `json_report` / `mismatch_error` —
+  output and the error a mismatch becomes
 - `VerifyPlugin` — the `ForgePlugin` impl
 
 ## Testing
@@ -47,4 +57,5 @@ cargo test -p soroban-forge-verify
 Tests never shell out to the real `stellar` binary or hit a network. The
 local side is resolved *before* the fetch, so every failure mode short of a
 real deployment (bad contract ID, missing build, non-wasm file) is covered
-directly; comparison and reporting are tested on constructed hashes.
+directly; comparison and reporting are tested on constructed hashes, and
+the interface diff on constructed spec JSON.

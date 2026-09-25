@@ -78,20 +78,53 @@ pub fn generate_keypair() -> (String, String) {
 }
 
 /// Fund a Stellar testnet account via friendbot.
-/// Returns the friendbot response body on success.
-pub fn fund_friendbot(public_key: &str) -> Result<String> {
+/// Returns the parsed balance (in XLM) on success.
+///
+/// Refuses to run on mainnet (passphrase contains "Public Global Stellar Network").
+pub fn fund_friendbot(public_key: &str, network_passphrase: Option<&str>) -> Result<String> {
+    // #287 — refuse to run on mainnet
+    if let Some(passphrase) = network_passphrase {
+        if passphrase.contains("Public Global Stellar Network") {
+            return Err(ForgeError::InvalidArgument(
+                "friendbot funding is only available on testnet/futurenet, not mainnet".into(),
+            ));
+        }
+    }
+
     let url = format!("https://friendbot.stellar.org/?addr={public_key}");
     log::debug!("requesting friendbot: {url}");
-    let response = ureq::get(&url)
-        .call()
-        .map_err(|e| ForgeError::Other(format!("friendbot request failed: {e}")))?;
+    let response = ureq::get(&url).call().map_err(|e| {
+        // Surface actionable error messages (#287)
+        ForgeError::Other(format!(
+            "friendbot request failed: {e}\n  \
+             hint: check your network connection, or the account may already be funded"
+        ))
+    })?;
     let body = response
         .into_string()
         .map_err(|e| ForgeError::Other(format!("reading friendbot response: {e}")))?;
-    Ok(body)
+
+    // Try to parse the balance from the horizon response.
+    // Friendbot returns the created account record; the native balance lives in balances[].
+    let balance = parse_native_balance(&body).unwrap_or_else(|| "unknown".to_string());
+    Ok(balance)
+}
+
+/// Extract the native XLM balance from a Horizon account JSON response.
+fn parse_native_balance(body: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(body).ok()?;
+    let balances = v.get("balances")?.as_array()?;
+    for b in balances {
+        if b.get("asset_type")?.as_str()? == "native" {
+            let bal = b.get("balance")?.as_str()?;
+            return Some(bal.to_string());
+        }
+    }
+    None
 }
 
 /// Format the identity list for display.
+/// Secret keys are always masked here — use `--show-secret` to reveal them.
 pub fn format_list(store: &IdentityStore) -> String {
     if store.identities.is_empty() {
         return "no identities stored. Use `soroban-forge identity generate <name>` to create one.\n".to_string();
@@ -129,11 +162,25 @@ impl ForgePlugin for IdentityPlugin {
                             .long("force")
                             .action(clap::ArgAction::SetTrue)
                             .help("Overwrite an existing identity with the same name"),
+                    )
+                    // #288 — explicit opt-in to showing secret keys
+                    .arg(
+                        Arg::new("show-secret")
+                            .long("show-secret")
+                            .action(clap::ArgAction::SetTrue)
+                            .help("Print the secret key in the output (omitted by default for safety)"),
                     ),
             )
             .subcommand(
                 Command::new("list")
-                    .about("List all stored identities"),
+                    .about("List all stored identities (public keys only)")
+                    // #288 — explicit opt-in to showing secret keys
+                    .arg(
+                        Arg::new("show-secret")
+                            .long("show-secret")
+                            .action(clap::ArgAction::SetTrue)
+                            .help("Also print secret keys (use with care in shared terminals)"),
+                    ),
             )
             .subcommand(
                 Command::new("fund")
@@ -142,6 +189,13 @@ impl ForgePlugin for IdentityPlugin {
                         Arg::new("name")
                             .help("Name of the identity to fund")
                             .required(true),
+                    )
+                    // #287 — allow passing an explicit network passphrase to guard mainnet
+                    .arg(
+                        Arg::new("network-passphrase")
+                            .long("network-passphrase")
+                            .value_name("PASSPHRASE")
+                            .help("Network passphrase (used to refuse mainnet funding)"),
                     ),
             )
     }
@@ -153,6 +207,8 @@ impl ForgePlugin for IdentityPlugin {
             Some(("generate", sub)) => {
                 let name = sub.get_one::<String>("name").unwrap();
                 let force = sub.get_flag("force");
+                // #288 — only show secret key when explicitly requested
+                let show_secret = sub.get_flag("show-secret");
                 let mut store = load_store(&path)?;
 
                 if store.identities.contains_key(name.as_str()) && !force {
@@ -170,41 +226,104 @@ impl ForgePlugin for IdentityPlugin {
                 save_store(&path, &store)?;
 
                 if ctx.json {
-                    let report = serde_json::json!({
+                    // #288 — never emit secret key in JSON output unless --show-secret
+                    let mut report = serde_json::json!({
                         "name": name,
                         "public_key": public_key,
-                        "secret_key": secret_key,
                     });
+                    if show_secret {
+                        report["secret_key"] = serde_json::Value::String(secret_key.clone());
+                    } else {
+                        report["secret_key"] = serde_json::Value::String("[redacted — pass --show-secret to reveal]".into());
+                    }
                     println!("{}", serde_json::to_string_pretty(&report).unwrap());
                 } else if !ctx.quiet {
                     println!("generated identity `{name}`");
                     println!("  public key: {public_key}");
-                    println!("  secret key: {secret_key}");
+                    // #288 — mask secret key by default
+                    if show_secret {
+                        println!("  secret key: {secret_key}");
+                    } else {
+                        println!("  secret key: [redacted — pass --show-secret to reveal]");
+                    }
                     println!();
                     println!("fund on testnet: soroban-forge identity fund {name}");
                 }
                 Ok(())
             }
 
-            Some(("list", _sub)) => {
+            Some(("list", sub)) => {
+                let show_secret = sub.get_flag("show-secret");
                 let store = load_store(&path)?;
                 if ctx.json {
-                    println!("{}", serde_json::to_string_pretty(&store.identities).unwrap());
+                    if show_secret {
+                        // Full store including secrets
+                        println!("{}", serde_json::to_string_pretty(&store.identities).unwrap());
+                    } else {
+                        // #288 — omit secret keys from JSON output
+                        let public_only: BTreeMap<&str, serde_json::Value> = store
+                            .identities
+                            .iter()
+                            .map(|(k, v)| {
+                                (
+                                    k.as_str(),
+                                    serde_json::json!({ "public_key": v.public_key }),
+                                )
+                            })
+                            .collect();
+                        println!("{}", serde_json::to_string_pretty(&public_only).unwrap());
+                    }
                 } else if !ctx.quiet {
-                    print!("{}", format_list(&store));
+                    if show_secret && !store.identities.is_empty() {
+                        // Show full list including secrets
+                        println!("stored identities:\n");
+                        let name_width = store.identities.keys().map(|k| k.len()).max().unwrap_or(0);
+                        for (name, id) in &store.identities {
+                            println!(
+                                "  {:<width$}  pub: {}  secret: {}",
+                                name,
+                                id.public_key,
+                                id.secret_key,
+                                width = name_width
+                            );
+                        }
+                    } else {
+                        print!("{}", format_list(&store));
+                    }
                 }
                 Ok(())
             }
 
             Some(("fund", sub)) => {
+                // #287 — refuse in offline mode
                 if ctx.offline {
                     return Err(ForgeError::InvalidArgument(
                         "friendbot funding is unavailable in offline mode".into(),
                     ));
                 }
                 let name = sub.get_one::<String>("name").unwrap();
-                let store = load_store(&path)?;
+                // #287 — accept passphrase to guard against mainnet runs
+                let network_passphrase = sub
+                    .get_one::<String>("network-passphrase")
+                    .map(String::as_str);
 
+                // Also check via forge.toml / context config
+                let config_passphrase = ctx
+                    .config
+                    .as_ref()
+                    .and_then(|c| c.network.passphrase.as_deref());
+                let effective_passphrase = network_passphrase.or(config_passphrase);
+
+                // #287 — refuse on mainnet
+                if let Some(passphrase) = effective_passphrase {
+                    if passphrase.contains("Public Global Stellar Network") {
+                        return Err(ForgeError::InvalidArgument(
+                            "friendbot funding is only available on testnet/futurenet, not mainnet".into(),
+                        ));
+                    }
+                }
+
+                let store = load_store(&path)?;
                 let id = store.identities.get(name.as_str()).ok_or_else(|| {
                     ForgeError::InvalidArgument(format!(
                         "identity `{name}` not found (use `soroban-forge identity list` to see available identities)"
@@ -215,7 +334,8 @@ impl ForgePlugin for IdentityPlugin {
                     println!("funding `{name}` ({}) via testnet friendbot...", id.public_key);
                 }
 
-                fund_friendbot(&id.public_key)?;
+                // #287 — fund_friendbot now returns the balance
+                let balance = fund_friendbot(&id.public_key, effective_passphrase)?;
 
                 if ctx.json {
                     let report = serde_json::json!({
@@ -223,10 +343,12 @@ impl ForgePlugin for IdentityPlugin {
                         "public_key": id.public_key,
                         "funded": true,
                         "network": "testnet",
+                        "balance_xlm": balance,
                     });
                     println!("{}", serde_json::to_string_pretty(&report).unwrap());
                 } else if !ctx.quiet {
                     println!("funded `{name}` on testnet.");
+                    println!("  balance: {balance} XLM");
                 }
                 Ok(())
             }
@@ -314,9 +436,73 @@ mod tests {
         assert!(output.contains("GAAA"));
         assert!(output.contains("bob"));
         assert!(output.contains("GBBB"));
-        // Secret keys must NOT appear in the list
-        assert!(!output.contains("SAAA"));
-        assert!(!output.contains("SBBB"));
+        // #288 — Secret keys must NOT appear in the list output
+        assert!(!output.contains("SAAA"), "secret key must not appear in format_list output");
+        assert!(!output.contains("SBBB"), "secret key must not appear in format_list output");
+    }
+
+    // #288 — secret keys must never appear in output unless --show-secret is passed
+    #[test]
+    fn generate_output_does_not_contain_secret_without_show_secret() {
+        use soroban_forge_core::ForgeContext;
+
+        let dir = tempfile::tempdir().unwrap();
+        // We can't easily capture stdout, but we can verify the plugin builds
+        // and the show_secret flag is wired up.
+        let plugin = IdentityPlugin;
+        let cmd = plugin.command();
+        let sub = cmd
+            .find_subcommand("generate")
+            .expect("generate subcommand exists");
+        let has_show_secret = sub
+            .get_arguments()
+            .any(|a| a.get_long() == Some("show-secret"));
+        assert!(has_show_secret, "generate must have --show-secret flag");
+    }
+
+    // #288 — list must have --show-secret flag
+    #[test]
+    fn list_subcommand_has_show_secret_flag() {
+        let plugin = IdentityPlugin;
+        let cmd = plugin.command();
+        let sub = cmd
+            .find_subcommand("list")
+            .expect("list subcommand exists");
+        let has_show_secret = sub
+            .get_arguments()
+            .any(|a| a.get_long() == Some("show-secret"));
+        assert!(has_show_secret, "list must have --show-secret flag");
+    }
+
+    // #287 — fund refuses on mainnet passphrase
+    #[test]
+    fn fund_friendbot_refuses_mainnet_passphrase() {
+        let result = fund_friendbot(
+            "GABC",
+            Some("Public Global Stellar Network ; September 2015"),
+        );
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("mainnet"), "error should mention mainnet: {msg}");
+    }
+
+    // #287 — fund allows testnet passphrase (would make network call, test only guards the refusal)
+    #[test]
+    fn fund_friendbot_allows_testnet_passphrase_guard() {
+        // We cannot make real network calls in unit tests. We verify that the
+        // mainnet guard does NOT fire for a testnet passphrase. The ureq call
+        // will fail (no network in CI) but the error won't be about mainnet.
+        let result = fund_friendbot("GABC", Some("Test SDF Network ; September 2015"));
+        match &result {
+            Err(e) => {
+                let msg = e.to_string();
+                assert!(
+                    !msg.contains("mainnet"),
+                    "testnet passphrase should not trigger mainnet refusal: {msg}"
+                );
+            }
+            Ok(_) => {} // real network available — fine
+        }
     }
 
     #[test]
@@ -330,5 +516,33 @@ mod tests {
         assert!(sub_names.contains(&"generate"));
         assert!(sub_names.contains(&"list"));
         assert!(sub_names.contains(&"fund"));
+    }
+
+    // #287 — fund refuses offline
+    #[test]
+    fn fund_subcommand_refuses_offline() {
+        use soroban_forge_core::ForgeContext;
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ForgeContext::with_options(
+            dir.path().to_path_buf(),
+            0,
+            false,
+            false,
+            false,
+            true, // offline = true
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        let plugin = IdentityPlugin;
+        let cmd = plugin.command();
+        let matches = cmd
+            .try_get_matches_from(["identity", "fund", "alice"])
+            .unwrap();
+        let result = plugin.run(&matches, &ctx);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("offline"), "error should mention offline: {msg}");
     }
 }

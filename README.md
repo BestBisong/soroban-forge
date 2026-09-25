@@ -101,7 +101,8 @@ with its own README, tests and a small public surface; they meet only at the
 
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the ownership map and how to pick
-up an issue — [ISSUES.md](ISSUES.md) lists well-scoped starter work.
+up an issue — [ISSUES.md](ISSUES.md) lists well-scoped starter work. All
+contributors are expected to follow the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## Requirements
 

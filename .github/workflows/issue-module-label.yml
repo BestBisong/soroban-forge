@@ -1,0 +1,39 @@
+# Turns the "Module" dropdown on the issue forms (.github/ISSUE_TEMPLATE/)
+# into the matching module:* label. The PR-side equivalent is labeler.yml.
+name: issue module label
+
+on:
+  issues:
+    types: [opened, edited]
+
+permissions:
+  issues: write
+
+jobs:
+  label:
+    name: apply module label
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            // Issue forms render a dropdown as "### Module\n\n<choice>".
+            // The body is untrusted input: it is only matched against an
+            // allowlist of known labels, never evaluated or passed to a shell.
+            const known = [
+              'core', 'scaffold', 'testgen', 'ci', 'dx', 'bindings', 'verify',
+              'spec', 'deploy', 'invoke', 'identity', 'network', 'optimize',
+            ].map((m) => `module:${m}`);
+            const body = context.payload.issue.body || '';
+            const match = body.match(/^### Module\s*\n+\s*(module:[a-z-]+)/m);
+            if (!match || !known.includes(match[1])) {
+              core.info('no module selected in the issue form');
+              return;
+            }
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.issue.number,
+              labels: [match[1]],
+            });
+            core.info(`added ${match[1]}`);

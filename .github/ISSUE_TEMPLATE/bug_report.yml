@@ -1,0 +1,85 @@
+name: Bug report
+description: Something in soroban-forge behaves wrongly or crashes
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug. Please search
+        [existing issues](https://github.com/soroban-forge-labs/soroban-forge/issues)
+        first. The module you pick below is added as a `module:*` label
+        automatically.
+  - type: dropdown
+    id: module
+    attributes:
+      label: Module
+      description: Which part of soroban-forge is affected? See the ownership map in CONTRIBUTING.md.
+      options:
+        - "module:core — CLI core, forge.toml, errors (crates/core, src/main.rs)"
+        - "module:scaffold — `new`, templates (crates/scaffold, crates/templates, templates/)"
+        - "module:testgen — `test-init` (crates/testgen)"
+        - "module:ci — `ci-init`, CI presets (crates/ci-presets, presets/)"
+        - "module:dx — `doctor`, docs, examples (crates/doctor, docs/, examples/)"
+        - "module:bindings — `bindings ts` (crates/binding-ts)"
+        - "module:verify — `verify` (crates/verify)"
+        - "module:spec — `spec` (crates/spec)"
+        - "module:deploy — `deploy` (crates/deploy)"
+        - "module:invoke — `invoke` (crates/invoke)"
+        - "module:identity — `identity` (crates/identity)"
+        - "module:network — `network` (crates/network)"
+        - "module:optimize — `optimize` (crates/optimize)"
+        - "Not sure"
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: A clear description of the bug, including any error output.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: The exact commands you ran, starting from a clean checkout if possible.
+      placeholder: |
+        1. soroban-forge new demo --template token
+        2. cd demo && soroban-forge verify C...
+        3. ...
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: soroban-forge doctor output
+      description: Paste the output of `soroban-forge doctor`. It lists your Rust, stellar-cli and target versions.
+      render: text
+  - type: input
+    id: version
+    attributes:
+      label: soroban-forge version
+      description: Output of `soroban-forge --version`, or the commit you built from.
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: macOS 15, Ubuntu 24.04, Windows 11 (WSL) ...
+    validations:
+      required: true
+  - type: checkboxes
+    id: conduct
+    attributes:
+      label: Code of Conduct
+      options:
+        - label: I agree to follow this project's [Code of Conduct](https://github.com/soroban-forge-labs/soroban-forge/blob/main/CODE_OF_CONDUCT.md).
+          required: true

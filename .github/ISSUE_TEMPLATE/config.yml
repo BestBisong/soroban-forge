@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Contributing guide
+    url: https://github.com/soroban-forge-labs/soroban-forge/blob/main/CONTRIBUTING.md
+    about: Module ownership map, development setup and how to claim an issue.
+  - name: Stellar developer docs
+    url: https://developers.stellar.org
+    about: Questions about Soroban or stellar-cli itself rather than soroban-forge.

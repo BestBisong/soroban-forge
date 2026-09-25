@@ -1123,9 +1123,7 @@ impl DoctorPlugin {
     /// check (issue #72), which is otherwise skipped since it is much slower
     /// than the rest of the report.
     fn gather_checks(&self, ctx: &ForgeContext, do_build: bool) -> Vec<Check> {
-        let mut checks = run_checks_with_network(!ctx.offline);
-        checks.push(toolchain_check(&ctx.cwd)); // issue #109
-        checks.push(wasm32_target_check(&ctx.cwd)); // issue #251
+        let mut checks = Vec::new();
         if ctx.offline {
             checks.push(Check {
                 name: "testnet RPC",
@@ -1133,14 +1131,14 @@ impl DoctorPlugin {
                 detail: "skipped (--offline)".into(),
                 fix: None,
             });
-        let mut checks = Vec::new();
-        if !ctx.offline {
+        } else {
             let url = config_network_url(ctx.config.as_ref())
                 .unwrap_or_else(|| TESTNET_RPC_URL.to_string());
             checks.push(rpc_connectivity_check(&url));
         }
         checks.extend(run_checks_with_network(false));
         checks.push(toolchain_check(&ctx.cwd)); // issue #109
+        checks.push(wasm32_target_check(&ctx.cwd)); // issue #251
         if let Some(check) = sdk_version_check(&ctx.cwd) {
             checks.push(check);
         }

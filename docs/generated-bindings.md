@@ -32,3 +32,18 @@ console.log('Pending reward:', pending);
 | `Symbol` | `string` |
 | `Vec<T>` | `T[]` |
 | `Map<K,V>` | `Map<K,V>` |
+
+## Publishing the Package
+
+`soroban-forge bindings ts` writes a `package.json` that is ready to
+publish: a conditional `exports` map with `types`, a `files` list, a
+`prepack` build, and `@stellar/stellar-sdk` as a **peer dependency**. The
+peer range follows the SDK the installed `stellar-cli` targets (`^16` for
+stellar-cli 28), so consumers install the SDK alongside the client:
+
+```sh
+npm install my-token @stellar/stellar-sdk@^16
+```
+
+Type declarations resolve under both `node16`/`nodenext` and `bundler`
+module resolution. See `crates/binding-ts/README.md` for the full field list.

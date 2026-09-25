@@ -10,7 +10,6 @@ use soroban_forge_core::render::{render_str, Vars};
 use soroban_forge_core::{ForgeContext, ForgeError, ForgePlugin, Result};
 use std::io::Write;
 use std::path::Path;
-use std::process::Command;
 
 static PRESETS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../../presets");
 
@@ -294,7 +293,7 @@ fn print_diff(path: &Path, generated: &str) -> Result<()> {
         .map_err(ForgeError::io(format!("writing {}", temp_path.display())))?;
 
     let left = if path.exists() { path } else { Path::new("/dev/null") };
-    let mut cmd = Command::new("diff");
+    let mut cmd = std::process::Command::new("diff");
     cmd.arg("-u").arg("--label").arg("generated").arg("--label").arg(path.to_string_lossy().as_ref());
     cmd.arg(left).arg(&temp_path);
     let output = cmd.output().map_err(ForgeError::io(format!("running diff for {}", path.display())))?;
@@ -374,7 +373,7 @@ impl ForgePlugin for CiPresetsPlugin {
                     available_providers().join(", ")
                 ))
             })?;
-            let mut selected: Vec<(&str, Option<&str>)> = match provider {
+            let mut selected: Vec<(&str, Option<&str>)> = match provider.as_str() {
                 "github" => {
                     let mut list: Vec<(&str, Option<&str>)> = BASE_WORKFLOWS.iter().map(|n| (*n, None)).collect();
                     if opts.deploy { list.push((DEPLOY_WORKFLOW, None)); }
@@ -631,7 +630,6 @@ mod tests {
         assert!(contents.contains("cargo clippy --all-targets -- -D warnings"));
         assert!(!contents.contains("{{project_name}}"));
     }
-}
 
     #[test]
     fn github_release_preset_is_emitted_when_requested() {

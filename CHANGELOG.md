@@ -7,6 +7,26 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Added
+- `soroban-forge verify` now prints an interface diff on a hash mismatch:
+  entrypoints added, removed or changed between the deployed contract and
+  the local build, also available as `spec_diff` in `--json`. If either
+  interface cannot be read the diff is reported as unavailable and the
+  mismatch verdict is unchanged (#275)
+- `soroban-forge bindings ts` rewrites the generated `package.json` so the
+  package is publishable as-is: conditional `exports` with `types`, `files`,
+  a `prepack` build, name/version from `Cargo.toml`, and
+  `@stellar/stellar-sdk` as a peer dependency (#266)
+- `CODE_OF_CONDUCT.md` (Contributor Covenant 2.1), issue forms for bug
+  reports and feature requests with a module picker that applies the
+  `module:*` label, and a PR template covering tests, module READMEs and the
+  changelog (#265)
+- `docs/releasing.md`: the maintainer release process from version bump to
+  published release, with each step marked manual or automated (#264)
+
+### Fixed
+- `main` failed to compile after conflicting merges in `core` (config
+  report and unknown-key check), `doctor` (`gather_checks`) and `ci-presets`
+  (`--diff` provider match, duplicate `Command` import, stray brace)
 - New `pausable` template — a minimal circuit breaker: an admin fixed at
   deploy time can `pause`/`unpause`, and guarded entrypoints reject calls with
   `Error::Paused` while paused

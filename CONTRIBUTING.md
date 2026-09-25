@@ -3,6 +3,9 @@
 Thanks for helping! This project is deliberately structured so five people (or
 five hundred) can work in parallel with minimal merge conflicts.
 
+Everyone taking part is expected to follow the
+[Code of Conduct](CODE_OF_CONDUCT.md).
+
 ## Module ownership map
 
 | module | paths | owner | subcommand |
@@ -86,6 +89,17 @@ would treat the template as a real package.
 `trivial` / `medium` / `high`. Comment on the GitHub issue to claim it. PRs
 should include tests and update the owning module's README when the public
 surface changes.
+
+New issues go through the bug report and feature request forms, which ask
+for the module and apply its `module:*` label automatically. The PR template
+has the checklist reviewers expect: tests, module README updates, docs and a
+`CHANGELOG.md` entry under `[Unreleased]`.
+
+## Releasing
+
+Maintainers: the full release sequence (version bump, changelog cut,
+tagging and publishing) and which parts are automated is documented in
+[docs/releasing.md](docs/releasing.md).
 
 ## License
 

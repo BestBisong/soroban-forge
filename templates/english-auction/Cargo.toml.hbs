@@ -1,8 +1,8 @@
 [package]
-name = "caller"
-version.workspace = true
-edition.workspace = true
-authors.workspace = true
+name = "{{project_name}}"
+version = "0.1.0"
+edition = "{{edition}}"
+authors = ["{{author}}"]
 publish = false
 
 [lib]
@@ -10,13 +10,10 @@ crate-type = ["lib", "cdylib"]
 doctest = false
 
 [dependencies]
-soroban-sdk.workspace = true
-receiver = { path = "../receiver" }
+soroban-sdk = "{{sdk_version}}"
 
 [dev-dependencies]
-soroban-sdk = { workspace = true, features = ["testutils"] }
-proptest = "1.6"
-ed25519-dalek.workspace = true
+soroban-sdk = { version = "{{sdk_version}}", features = ["testutils"] }
 
 [profile.release]
 opt-level = "z"

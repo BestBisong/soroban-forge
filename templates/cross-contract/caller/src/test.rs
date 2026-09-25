@@ -4,7 +4,7 @@ use soroban_sdk::{symbol_short, testutils::Address as _, Address, Env, Symbol};
 
 /// Test setup: registers both caller and receiver contracts
 fn setup(env: &Env) -> (Address, Address) {
-    env.mock_all_auths();
+    env.mock_all_auths_allowing_non_root_auth();
 
     // Register the receiver contract
     let receiver_contract = env.register(Receiver, ());
@@ -66,7 +66,7 @@ fn test_end_to_end_cross_contract_auth() {
     // 5. Both contracts succeed
 
     let env = Env::default();
-    env.mock_all_auths();
+    env.mock_all_auths_allowing_non_root_auth();
 
     let receiver = env.register(Receiver, ());
     let caller = env.register(Caller, ());

@@ -34,7 +34,7 @@ jobs:
         # crates/scaffold/src/lib.rs::available_templates) — the matrix below
         # fans out over whatever it reports, never a list maintained here.
         run: |
-          templates=$(./target/release/soroban-forge new --list-templates --json | jq -c '.templates')
+          templates=$(./target/release/soroban-forge new --list-templates --json | jq -c 'if type == "array" then [.[].name] else .templates end')
           echo "templates=$templates" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:

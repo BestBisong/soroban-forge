@@ -173,6 +173,7 @@ pub fn template_description(name: &str) -> Option<&'static str> {
         "crowdfund" => Some("escrow/deadline crowdfunding contract"),
         "cross-contract" => Some("two-contract workspace demonstrating cross-contract calls with authorization"),
         "dutch-auction" => Some("descending-price auction with linear price decay and immediate settlement"),
+        "english-auction" => Some("iterative ascending-bid auction with minimum increments and settlement"),
         "escrow" => Some("token escrow with approval or timeout-based refund path"),
         "faucet" => Some("token faucet dispensing a fixed amount per address with a cooldown"),
         "flash-loan" => Some(

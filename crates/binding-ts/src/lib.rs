@@ -13,6 +13,10 @@
 //! - choosing/validating the output directory
 //! - surfacing a friendly error (pointing at `soroban-forge doctor`) when
 //!   `stellar-cli` isn't on `PATH`
+//! - rewriting the generated `package.json` so the package is publishable
+//!   as-is: a conditional `exports` map, `types`, `files`, and
+//!   `@stellar/stellar-sdk` as a peer dependency (see
+//!   [`make_publishable`])
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
@@ -23,6 +27,18 @@ use soroban_forge_core::{ForgeContext, ForgeError, ForgePlugin, Result};
 
 const DEFAULT_OUTPUT_SUBDIR: &str = "bindings/typescript";
 
+/// The Stellar SDK package the generated client imports.
+pub const STELLAR_SDK: &str = "@stellar/stellar-sdk";
+
+/// Peer range used when `stellar contract bindings typescript` does not pin
+/// the SDK itself. The supported range otherwise follows the stellar-cli
+/// release that generated the bindings (stellar-cli 28 pins `^16`), since
+/// the generated code targets that SDK's API.
+pub const DEFAULT_STELLAR_SDK_RANGE: &str = "^16.0.0";
+
+/// Oldest Node.js the generated package declares support for.
+pub const MIN_NODE: &str = ">=18";
+
 #[derive(Deserialize)]
 struct Manifest {
     package: Package,
@@ -31,15 +47,20 @@ struct Manifest {
 #[derive(Deserialize)]
 struct Package {
     name: String,
+    /// A string, or `{ workspace = true }` — only the string form is used.
+    version: Option<toml::Value>,
 }
 
-/// Cargo package identity, enough to locate the built wasm.
+/// Cargo package identity, enough to locate the built wasm and name the
+/// generated npm package.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PackageInfo {
     /// Cargo package name, e.g. `my-token`.
     pub package_name: String,
     /// Rust crate name (snake_case), e.g. `my_token`.
     pub crate_name: String,
+    /// `[package].version` when it is a literal string.
+    pub version: Option<String>,
 }
 
 /// Read `[package].name` out of `dir/Cargo.toml`.
@@ -51,14 +72,20 @@ pub fn read_package_info(dir: &Path) -> Result<PackageInfo> {
             dir.display()
         )));
     }
-    let raw = std::fs::read_to_string(&manifest_path)
-        .map_err(ForgeError::io(format!("reading {}", manifest_path.display())))?;
+    let raw = std::fs::read_to_string(&manifest_path).map_err(ForgeError::io(format!(
+        "reading {}",
+        manifest_path.display()
+    )))?;
     let manifest: Manifest = toml::from_str(&raw).map_err(|e| ForgeError::Config {
         path: manifest_path.clone(),
         message: e.to_string(),
     })?;
     Ok(PackageInfo {
         crate_name: manifest.package.name.replace('-', "_"),
+        version: manifest
+            .package
+            .version
+            .and_then(|v| v.as_str().map(str::to_string)),
         package_name: manifest.package.name,
     })
 }
@@ -79,12 +106,16 @@ pub fn generate_bindings(
     output: &Path,
     force: bool,
 ) -> Result<PathBuf> {
-    let wasm_path = match wasm_override {
-        Some(p) => p.to_path_buf(),
-        None => {
-            let info = read_package_info(contract_dir)?;
-            locate_wasm(contract_dir, &info.crate_name)
-        }
+    // With --wasm the project manifest is optional: it only supplies the
+    // npm package name and version.
+    let info = match wasm_override {
+        Some(_) => read_package_info(contract_dir).ok(),
+        None => Some(read_package_info(contract_dir)?),
+    };
+    let wasm_path = match (wasm_override, &info) {
+        (Some(p), _) => p.to_path_buf(),
+        (None, Some(info)) => locate_wasm(contract_dir, &info.crate_name),
+        (None, None) => unreachable!("read_package_info errors above"),
     };
 
     if !wasm_path.is_file() {
@@ -103,17 +134,130 @@ pub fn generate_bindings(
     }
 
     run_stellar_bindings(&wasm_path, output)?;
+    finalize_package_json(output, info.as_ref())?;
     Ok(wasm_path)
+}
+
+/// Rewrite `output/package.json` in place with [`make_publishable`].
+fn finalize_package_json(output: &Path, info: Option<&PackageInfo>) -> Result<()> {
+    let path = output.join("package.json");
+    let raw = std::fs::read_to_string(&path)
+        .map_err(ForgeError::io(format!("reading {}", path.display())))?;
+    let mut pkg: serde_json::Value = serde_json::from_str(&raw).map_err(|e| {
+        ForgeError::Other(format!(
+            "stellar generated an invalid {}: {e}",
+            path.display()
+        ))
+    })?;
+    make_publishable(&mut pkg, info);
+    let mut pretty = serde_json::to_string_pretty(&pkg).expect("a JSON value always serialises");
+    pretty.push('\n');
+    std::fs::write(&path, pretty).map_err(ForgeError::io(format!("writing {}", path.display())))
+}
+
+/// npm package name for a cargo package: npm names must be lowercase.
+pub fn npm_package_name(package_name: &str) -> String {
+    package_name.to_ascii_lowercase()
+}
+
+/// Turn the `package.json` stellar-cli generates into one that can be
+/// `npm pack`ed and published without edits:
+///
+/// - name/version from `Cargo.toml` when known
+/// - `exports` as a conditional map (`types` first, then `import`/`default`)
+///   plus `main`/`types` for tools that predate `exports` — this is what
+///   lets the declarations resolve under both `node16`/`nodenext` and
+///   `bundler` module resolution
+/// - `files` limited to the build output, sources and README
+/// - `@stellar/stellar-sdk` moved from `dependencies` to
+///   `peerDependencies` (and mirrored in `devDependencies` so `tsc` can
+///   still build), so apps and the client share one SDK instance
+/// - a `prepack` build, so `npm pack`/`npm publish` never ship a stale or
+///   missing `dist/`
+///
+/// Fields stellar-cli sets that are not listed here are left untouched.
+pub fn make_publishable(pkg: &mut serde_json::Value, info: Option<&PackageInfo>) {
+    use serde_json::{json, Map, Value};
+
+    if !pkg.is_object() {
+        *pkg = Value::Object(Map::new());
+    }
+    let obj = pkg.as_object_mut().expect("just ensured an object");
+
+    if let Some(info) = info {
+        obj.insert("name".into(), json!(npm_package_name(&info.package_name)));
+        if let Some(version) = &info.version {
+            obj.insert("version".into(), json!(version));
+        }
+    }
+    obj.entry("version").or_insert_with(|| json!("0.0.0"));
+
+    obj.insert("type".into(), json!("module"));
+    obj.insert("main".into(), json!("./dist/index.js"));
+    obj.insert("types".into(), json!("./dist/index.d.ts"));
+    obj.remove("typings");
+    obj.insert(
+        "exports".into(),
+        json!({
+            ".": {
+                "types": "./dist/index.d.ts",
+                "import": "./dist/index.js",
+                "default": "./dist/index.js"
+            },
+            "./package.json": "./package.json"
+        }),
+    );
+    obj.insert("files".into(), json!(["dist", "src", "README.md"]));
+    obj.insert("sideEffects".into(), json!(false));
+    obj.entry("engines")
+        .or_insert_with(|| json!({}))
+        .as_object_mut()
+        .map(|engines| engines.entry("node").or_insert_with(|| json!(MIN_NODE)));
+
+    let scripts = obj
+        .entry("scripts")
+        .or_insert_with(|| json!({}))
+        .as_object_mut();
+    if let Some(scripts) = scripts {
+        scripts.entry("build").or_insert_with(|| json!("tsc"));
+        scripts.insert("prepack".into(), json!("npm run build"));
+    }
+
+    // Move the SDK to peerDependencies, keeping whatever range the CLI chose.
+    let sdk_range = obj
+        .get_mut("dependencies")
+        .and_then(Value::as_object_mut)
+        .and_then(|deps| deps.remove(STELLAR_SDK))
+        .unwrap_or_else(|| json!(DEFAULT_STELLAR_SDK_RANGE));
+    for table in ["peerDependencies", "devDependencies"] {
+        if let Some(deps) = obj
+            .entry(table)
+            .or_insert_with(|| json!({}))
+            .as_object_mut()
+        {
+            deps.insert(STELLAR_SDK.into(), sdk_range.clone());
+        }
+    }
+    if obj
+        .get("dependencies")
+        .and_then(Value::as_object)
+        .is_some_and(Map::is_empty)
+    {
+        obj.remove("dependencies");
+    }
 }
 
 /// Shell out to the official CLI. Never reimplemented locally.
 fn run_stellar_bindings(wasm: &Path, output: &Path) -> Result<()> {
-    let wasm_str = wasm
-        .to_str()
-        .ok_or_else(|| ForgeError::Other(format!("wasm path {} is not valid UTF-8", wasm.display())))?;
-    let output_str = output
-        .to_str()
-        .ok_or_else(|| ForgeError::Other(format!("output path {} is not valid UTF-8", output.display())))?;
+    let wasm_str = wasm.to_str().ok_or_else(|| {
+        ForgeError::Other(format!("wasm path {} is not valid UTF-8", wasm.display()))
+    })?;
+    let output_str = output.to_str().ok_or_else(|| {
+        ForgeError::Other(format!(
+            "output path {} is not valid UTF-8",
+            output.display()
+        ))
+    })?;
 
     // TODO(verify): confirm `--output-dir` is the correct flag name against
     // `stellar contract bindings typescript --help` — not reimplementing the
@@ -141,7 +285,9 @@ fn run_stellar_bindings(wasm: &Path, output: &Path) -> Result<()> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             Err(ForgeError::ToolMissing("stellar-cli".into()))
         }
-        Err(e) => Err(ForgeError::io("running stellar contract bindings typescript")(e)),
+        Err(e) => Err(ForgeError::io(
+            "running stellar contract bindings typescript",
+        )(e)),
     }
 }
 
@@ -272,10 +418,7 @@ fn watch_loop(
             last = now;
             if let Err(err) = regenerate(dir, wasm_override, output, ctx) {
                 if !ctx.quiet {
-                    eprintln!(
-                        "[{}] regeneration failed: {err} (continuing)",
-                        timestamp()
-                    );
+                    eprintln!("[{}] regeneration failed: {err} (continuing)", timestamp());
                 }
             }
         }
@@ -357,6 +500,123 @@ mod tests {
         let info = read_package_info(tmp.path()).unwrap();
         assert_eq!(info.package_name, "my-token");
         assert_eq!(info.crate_name, "my_token");
+        assert_eq!(info.version.as_deref(), Some("0.1.0"));
+    }
+
+    #[test]
+    fn workspace_inherited_version_is_ignored() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("Cargo.toml"),
+            "[package]\nname = \"demo\"\nversion.workspace = true\n",
+        )
+        .unwrap();
+        assert_eq!(read_package_info(tmp.path()).unwrap().version, None);
+    }
+
+    /// What `stellar contract bindings typescript` (stellar-cli 28) writes.
+    fn cli_package_json() -> serde_json::Value {
+        serde_json::json!({
+            "version": "0.0.0",
+            "name": "typescript",
+            "type": "module",
+            "exports": "./dist/index.js",
+            "typings": "dist/index.d.ts",
+            "scripts": { "build": "tsc" },
+            "dependencies": { "@stellar/stellar-sdk": "^16.0.1", "buffer": "6.0.3" },
+            "devDependencies": { "typescript": "^5.6.2" }
+        })
+    }
+
+    fn demo_info() -> PackageInfo {
+        PackageInfo {
+            package_name: "My-Token".into(),
+            crate_name: "my_token".into(),
+            version: Some("1.2.3".into()),
+        }
+    }
+
+    #[test]
+    fn publishable_package_has_conditional_exports_and_types() {
+        let mut pkg = cli_package_json();
+        make_publishable(&mut pkg, Some(&demo_info()));
+
+        assert_eq!(pkg["name"], "my-token");
+        assert_eq!(pkg["version"], "1.2.3");
+        assert_eq!(pkg["type"], "module");
+        assert_eq!(pkg["main"], "./dist/index.js");
+        assert_eq!(pkg["types"], "./dist/index.d.ts");
+        assert!(pkg.get("typings").is_none());
+
+        let root = &pkg["exports"]["."];
+        assert_eq!(root["types"], "./dist/index.d.ts");
+        assert_eq!(root["import"], "./dist/index.js");
+        // `types` must be the first condition for TypeScript to pick it up.
+        let conditions: Vec<&String> = root.as_object().unwrap().keys().collect();
+        assert_eq!(conditions, ["types", "import", "default"]);
+        assert_eq!(pkg["exports"]["./package.json"], "./package.json");
+    }
+
+    #[test]
+    fn publishable_package_lists_files_and_builds_on_pack() {
+        let mut pkg = cli_package_json();
+        make_publishable(&mut pkg, Some(&demo_info()));
+
+        assert_eq!(
+            pkg["files"],
+            serde_json::json!(["dist", "src", "README.md"])
+        );
+        assert_eq!(pkg["scripts"]["build"], "tsc");
+        assert_eq!(pkg["scripts"]["prepack"], "npm run build");
+        assert_eq!(pkg["engines"]["node"], MIN_NODE);
+    }
+
+    #[test]
+    fn stellar_sdk_becomes_a_peer_dependency_with_the_cli_range() {
+        let mut pkg = cli_package_json();
+        make_publishable(&mut pkg, Some(&demo_info()));
+
+        assert_eq!(pkg["peerDependencies"][STELLAR_SDK], "^16.0.1");
+        assert_eq!(pkg["devDependencies"][STELLAR_SDK], "^16.0.1");
+        assert!(pkg["dependencies"].get(STELLAR_SDK).is_none());
+        // Other runtime deps are untouched.
+        assert_eq!(pkg["dependencies"]["buffer"], "6.0.3");
+        assert_eq!(pkg["devDependencies"]["typescript"], "^5.6.2");
+    }
+
+    #[test]
+    fn missing_sdk_falls_back_to_the_documented_range() {
+        let mut pkg = serde_json::json!({ "name": "x", "dependencies": {} });
+        make_publishable(&mut pkg, None);
+
+        assert_eq!(
+            pkg["peerDependencies"][STELLAR_SDK],
+            DEFAULT_STELLAR_SDK_RANGE
+        );
+        assert!(
+            pkg.get("dependencies").is_none(),
+            "empty dependencies are dropped"
+        );
+        // No Cargo.toml info: the CLI's name is kept, a version is ensured.
+        assert_eq!(pkg["name"], "x");
+        assert_eq!(pkg["version"], "0.0.0");
+    }
+
+    #[test]
+    fn finalize_rewrites_package_json_on_disk() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("package.json"),
+            serde_json::to_string(&cli_package_json()).unwrap(),
+        )
+        .unwrap();
+
+        finalize_package_json(tmp.path(), Some(&demo_info())).unwrap();
+
+        let raw = std::fs::read_to_string(tmp.path().join("package.json")).unwrap();
+        assert!(raw.ends_with('\n'));
+        let pkg: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(pkg["peerDependencies"][STELLAR_SDK], "^16.0.1");
     }
 
     #[test]
@@ -417,10 +677,8 @@ mod tests {
 
     #[test]
     fn watch_flag_is_exposed_on_the_ts_subcommand() {
-        let cmd = BindingsTsPlugin.command();
-        let ts = cmd
-            .find_subcommand("ts")
-            .expect("ts subcommand");
+        let mut cmd = BindingsTsPlugin.command();
+        let ts = cmd.find_subcommand_mut("ts").expect("ts subcommand");
         let help = ts.render_long_help().to_string();
         assert!(help.contains("--watch"), "{help}");
     }
